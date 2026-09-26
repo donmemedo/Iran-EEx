@@ -1,0 +1,53 @@
+name: eex-iran
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-eex}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-eex_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-eex}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-eex} -d ${POSTGRES_DB:-eex}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    # Not published by default - only the API needs to reach it.
+    expose:
+      - "5432"
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-eex}:${POSTGRES_PASSWORD:-eex_dev_password}@db:5432/${POSTGRES_DB:-eex}
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production-eex-iran}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      SEED_ON_STARTUP: ${SEED_ON_STARTUP:-true}
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Baked into the client bundle, so it must be the URL the *browser*
+        # uses - not the internal service name.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+
+volumes:
+  db_data:
