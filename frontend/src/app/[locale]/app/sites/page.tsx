@@ -4,7 +4,7 @@ import { Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import useSWR from "swr";
 
-import { EmptyState, PageHeader, SiteCard } from "@/components/app/pieces";
+import { EmptyState, ErrorState, PageHeader, SiteCard } from "@/components/app/pieces";
 import { Input, Select } from "@/components/ui/field";
 import { SkeletonCard } from "@/components/ui/skeleton";
 import type { Site } from "@/lib/api";
@@ -15,7 +15,7 @@ const INDUSTRIES = ["steel", "cement", "ceramic", "plastic", "food", "pharma", "
 export default function SitesPage() {
   const { dict, href } = useLocale();
   const pick = useLocalized();
-  const { data, isLoading } = useSWR<Site[]>("/api/v1/sites");
+  const { data, error, isLoading, mutate } = useSWR<Site[]>("/api/v1/sites");
 
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("");
@@ -79,7 +79,9 @@ export default function SitesPage() {
         </Select>
       </div>
 
-      {isLoading ? (
+      {error && !data ? (
+        <ErrorState error={error} onRetry={() => mutate()} />
+      ) : isLoading ? (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {Array.from({ length: 6 }).map((_, index) => (
             <SkeletonCard key={index} />

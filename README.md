@@ -46,7 +46,10 @@ reported regardless of size — they are compliance signals, not just money.
 ### With Docker (recommended)
 
 ```bash
-cp .env.example .env          # then edit JWT_SECRET and the Postgres password
+cp .env.example .env
+# Fill in the two secrets (compose refuses to start without them):
+#   JWT_SECRET=$(openssl rand -hex 32)   POSTGRES_PASSWORD=$(openssl rand -hex 24)
+# For a local demo also set SEED_ON_STARTUP=true and NEXT_PUBLIC_DEMO_MODE=true.
 docker compose up --build
 ```
 
@@ -54,13 +57,14 @@ docker compose up --build
 |---|---|
 | Web app | http://localhost:3000 |
 | API | http://localhost:8000 |
-| Interactive API docs | http://localhost:8000/docs |
+| Interactive API docs | http://localhost:8000/docs (only with `ENVIRONMENT=development`) |
 
-The database is seeded on first boot with a demo portfolio: 20 industrial sites across
-eight provinces, a year of invoices each, and the findings the audit engine produced from
-them.
+With `SEED_ON_STARTUP=true` the database is seeded on first boot with a demo portfolio:
+20 industrial sites across eight provinces, a year of invoices each, and the findings the
+audit engine produced from them.
 
-**Demo login** — `demo@eex.ir` / `demo1234`
+**Demo login** (demo mode only) — `demo@eex.ir` / `demo1234`. The demo users have a
+published password, so never enable demo mode on a deployment that holds real data.
 
 ### Without Docker
 
@@ -69,8 +73,9 @@ Two terminals.
 ```bash
 # Terminal 1 — API
 cd backend
-python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
-./.venv/bin/uvicorn app.main:app --reload --port 8000
+python3 -m venv .venv && ./.venv/bin/python -m pip install -r requirements-dev.txt
+cp .env.example .env          # ENVIRONMENT=development, demo seed on
+./.venv/bin/python -m uvicorn app.main:app --reload --port 8000
 ```
 
 ```bash
@@ -162,7 +167,9 @@ cd backend && ./.venv/bin/python -m pytest tests -q
 ```
 
 Covers the tariff model, each finding type, the determinism and bounds of the load-profile
-generator, Jalali round-trips, and the API surface including auth failures.
+generator, Jalali round-trips, and the API surface. `tests/test_security.py` holds the
+security regressions: cross-tenant access, roles, forged tokens, rate limits, hostile input
+and response headers. The demo data is seeded once per session and copied per test.
 
 ```bash
 cd frontend && npm run typecheck && npm run build

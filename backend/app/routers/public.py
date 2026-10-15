@@ -1,7 +1,8 @@
 """Endpoints the marketing site calls without authentication."""
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from ..models import Lead
+from ..ratelimit import analyze_by_ip, calculator_by_ip, leads_by_ip
 from ..schemas import (
     BillAnalyzeRequest,
     BillAnalyzeResponse,
@@ -31,7 +32,11 @@ INDUSTRY_FACTORS: dict[str, float] = {
 }
 
 
-@router.post("/calculator/estimate", response_model=CalculatorResponse)
+@router.post(
+    "/calculator/estimate",
+    response_model=CalculatorResponse,
+    dependencies=[Depends(calculator_by_ip.by_ip)],
+)
 def estimate(payload: CalculatorRequest) -> CalculatorResponse:
     """Savings calculator behind the landing page.
 
@@ -112,7 +117,11 @@ def estimate(payload: CalculatorRequest) -> CalculatorResponse:
     )
 
 
-@router.post("/bills/analyze", response_model=BillAnalyzeResponse)
+@router.post(
+    "/bills/analyze",
+    response_model=BillAnalyzeResponse,
+    dependencies=[Depends(analyze_by_ip.by_ip)],
+)
 def analyze(payload: BillAnalyzeRequest) -> BillAnalyzeResponse:
     """Run the audit engine on numbers pasted straight off an invoice."""
     data = BillInput(**payload.model_dump())
@@ -124,7 +133,12 @@ def analyze(payload: BillAnalyzeRequest) -> BillAnalyzeResponse:
     )
 
 
-@router.post("/leads", response_model=LeadResponse, status_code=201)
+@router.post(
+    "/leads",
+    response_model=LeadResponse,
+    status_code=201,
+    dependencies=[Depends(leads_by_ip.by_ip)],
+)
 def create_lead(payload: LeadRequest, session: DbSession) -> LeadResponse:
     lead = Lead(**payload.model_dump(exclude={"email"}), email=str(payload.email) if payload.email else None)
     session.add(lead)

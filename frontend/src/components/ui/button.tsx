@@ -18,9 +18,10 @@ const variants: Record<Variant, string> = {
 };
 
 const sizes: Record<Size, string> = {
-  sm: "h-9 px-3.5 text-[0.8125rem] gap-1.5 rounded-[--radius-sm]",
-  md: "h-11 px-5 text-sm gap-2 rounded-[--radius-md]",
-  lg: "h-13 px-7 text-base gap-2.5 rounded-[--radius-md]",
+  // 36px tall to look compact; tap-target keeps the hit area at 44px.
+  sm: "tap-target h-9 px-3.5 text-[0.8125rem] gap-1.5 rounded-sm",
+  md: "h-11 px-5 text-sm gap-2 rounded-md",
+  lg: "h-13 px-7 text-base gap-2.5 rounded-md",
 };
 
 /**

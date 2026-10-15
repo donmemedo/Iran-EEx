@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import useSWR from "swr";
 
-import { PageHeader } from "@/components/app/pieces";
+import { ErrorState, PageHeader } from "@/components/app/pieces";
 import { Badge, billStatusTone, severityTone } from "@/components/ui/badge";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -29,9 +29,23 @@ export default function BillDetailPage() {
   const params = useParams<{ id: string }>();
   const { dict, locale, href, dir } = useLocale();
   const pick = useLocalized();
-  const { data: bill } = useSWR<BillDetail>(`/api/v1/bills/${params.id}`);
+  const { data: bill, error, mutate } = useSWR<BillDetail>(`/api/v1/bills/${params.id}`);
   const Back = dir === "rtl" ? ArrowRight : ArrowLeft;
 
+  if (error && !bill) {
+    return (
+      <>
+        <Link
+          href={href("/app/bills")}
+          className="tap-target mb-4 inline-flex items-center gap-1.5 rounded-xs text-xs text-ink-3 transition-colors hover:text-ink"
+        >
+          <Back className="size-3.5" />
+          {dict.app.bills.title}
+        </Link>
+        <ErrorState error={error} onRetry={() => mutate()} />
+      </>
+    );
+  }
   if (!bill) return <Skeleton className="h-96 w-full" />;
 
   const billed = splitToman(bill.billed_total, locale, dict.common);
@@ -47,7 +61,7 @@ export default function BillDetailPage() {
     <>
       <Link
         href={href(`/app/sites/${bill.site_id}`)}
-        className="mb-4 inline-flex items-center gap-1.5 text-xs text-ink-3 transition-colors hover:text-ink"
+        className="tap-target mb-4 inline-flex items-center gap-1.5 rounded-xs text-xs text-ink-3 transition-colors hover:text-ink"
       >
         <Back className="size-3.5" />
         {pick(bill, "site_name")}
@@ -203,7 +217,7 @@ export default function BillDetailPage() {
                     </div>
                     <div className="shrink-0 text-end">
                       <div className="flex items-center gap-1.5 text-brand">
-                        <TrendingDown className="size-3.5" />
+                        <TrendingDown className="size-3.5 rtl:-scale-x-100" />
                         <span className="text-lg font-bold tabular">{saving.value}</span>
                       </div>
                       <div className="text-[0.625rem] text-ink-3">
@@ -212,7 +226,7 @@ export default function BillDetailPage() {
                     </div>
                   </div>
 
-                  <div className="mt-4 rounded-[--radius-md] border border-line bg-surface-2 p-3.5">
+                  <div className="mt-4 rounded-md border border-line bg-surface-2 p-3.5">
                     <div className="flex items-start gap-2">
                       <Lightbulb className="mt-0.5 size-3.5 shrink-0 text-brand" />
                       <div>

@@ -10,18 +10,23 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Field, Input } from "@/components/ui/field";
 import { LocaleToggle, ThemeToggle } from "@/components/ui/toggles";
+import { ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { formatNumber } from "@/lib/format";
 import { useLocale } from "@/lib/locale-context";
 
-const DEMO = { email: "demo@eex.ir", password: "demo1234" };
+// The demo users exist only when the backend seeds them (SEED_ON_STARTUP=true).
+// The flag is inlined at build time, so production bundles carry no credentials.
+const DEMO =
+  process.env.NEXT_PUBLIC_DEMO_MODE === "true" ? { email: "demo@eex.ir", password: "demo1234" } : null;
 
 export default function LoginPage() {
-  const { dict, href, dir } = useLocale();
+  const { dict, href, dir, locale } = useLocale();
   const { login, status } = useAuth();
   const router = useRouter();
 
-  const [email, setEmail] = useState(DEMO.email);
-  const [password, setPassword] = useState(DEMO.password);
+  const [email, setEmail] = useState(DEMO?.email ?? "");
+  const [password, setPassword] = useState(DEMO?.password ?? "");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -32,6 +37,24 @@ export default function LoginPage() {
     if (status === "authenticated") router.replace(href("/app"));
   }, [status, router, href]);
 
+  function errorMessage(error: unknown): string {
+    if (error instanceof ApiError && error.status === 429) {
+      const seconds = error.retryAfter;
+      if (!seconds) return dict.auth.tooManyAttemptsLater;
+      const inMinutes = seconds >= 60;
+      const wait = formatNumber(inMinutes ? Math.ceil(seconds / 60) : seconds, locale, {
+        style: "unit",
+        unit: inMinutes ? "minute" : "second",
+        unitDisplay: "long",
+      });
+      return dict.auth.tooManyAttempts.replace("{wait}", wait);
+    }
+    // Any other 4xx means the server rejected the credentials.
+    if (error instanceof ApiError && error.status < 500) return dict.auth.invalid;
+    // 5xx, or fetch() rejected because the server could not be reached.
+    return dict.auth.unreachable;
+  }
+
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     setSubmitting(true);
@@ -39,8 +62,8 @@ export default function LoginPage() {
     try {
       await login(email.trim().toLowerCase(), password);
       router.replace(href("/app"));
-    } catch {
-      setError(dict.auth.invalid);
+    } catch (err) {
+      setError(errorMessage(err));
       setSubmitting(false);
     }
   }
@@ -69,18 +92,22 @@ export default function LoginPage() {
                   type="email"
                   dir="ltr"
                   required
-                  autoComplete="email"
+                  maxLength={254}
+                  autoComplete="username"
+                  autoCapitalize="none"
+                  spellCheck={false}
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
                 />
               </Field>
 
-              <Field label={dict.auth.password} error={error}>
+              <Field label={dict.auth.password}>
                 <div className="relative">
                   <Input
                     type={showPassword ? "text" : "password"}
                     dir="ltr"
                     required
+                    maxLength={128}
                     autoComplete="current-password"
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
@@ -97,37 +124,46 @@ export default function LoginPage() {
                 </div>
               </Field>
 
+              {/* Form-level, not under one field: "server unreachable" is about neither input. */}
+              {error && (
+                <p role="alert" className="text-xs text-critical">
+                  {error}
+                </p>
+              )}
+
               <Button type="submit" size="lg" loading={submitting} className="w-full">
                 {!submitting && <LogIn className="size-4" />}
                 {submitting ? dict.auth.submitting : dict.auth.submit}
               </Button>
             </form>
 
-            <div className="mt-6 rounded-[--radius-md] border border-line bg-surface-2 p-4">
-              <h2 className="text-xs font-semibold text-ink">{dict.auth.demoTitle}</h2>
-              <p className="mt-1.5 text-[0.6875rem] leading-relaxed text-ink-2">{dict.auth.demoBody}</p>
-              <dl className="mt-2.5 space-y-1 text-[0.6875rem] tabular" dir="ltr">
-                <div className="flex gap-2">
-                  <dt className="text-ink-3">email</dt>
-                  <dd className="font-medium text-ink">{DEMO.email}</dd>
-                </div>
-                <div className="flex gap-2">
-                  <dt className="text-ink-3">password</dt>
-                  <dd className="font-medium text-ink">{DEMO.password}</dd>
-                </div>
-              </dl>
-              <Button
-                variant="secondary"
-                size="sm"
-                className="mt-3 w-full"
-                onClick={() => {
-                  setEmail(DEMO.email);
-                  setPassword(DEMO.password);
-                }}
-              >
-                {dict.auth.useDemo}
-              </Button>
-            </div>
+            {DEMO && (
+              <div className="mt-6 rounded-md border border-line bg-surface-2 p-4">
+                <h2 className="text-xs font-semibold text-ink">{dict.auth.demoTitle}</h2>
+                <p className="mt-1.5 text-[0.6875rem] leading-relaxed text-ink-2">{dict.auth.demoBody}</p>
+                <dl className="mt-2.5 space-y-1 text-[0.6875rem] tabular" dir="ltr">
+                  <div className="flex gap-2">
+                    <dt className="text-ink-3">email</dt>
+                    <dd className="font-medium text-ink">{DEMO.email}</dd>
+                  </div>
+                  <div className="flex gap-2">
+                    <dt className="text-ink-3">password</dt>
+                    <dd className="font-medium text-ink">{DEMO.password}</dd>
+                  </div>
+                </dl>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="mt-3 w-full"
+                  onClick={() => {
+                    setEmail(DEMO.email);
+                    setPassword(DEMO.password);
+                  }}
+                >
+                  {dict.auth.useDemo}
+                </Button>
+              </div>
+            )}
           </Card>
 
           <Link

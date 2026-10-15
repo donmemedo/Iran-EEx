@@ -54,6 +54,14 @@ const en: typeof fa = {
     kvar: "kVAr",
     now: "now",
     live: "Live",
+    errors: {
+      load: "Couldn't load this data. Check your connection and try again.",
+      save: "Your change wasn't saved. Check your connection and try again.",
+      forbidden: "You don't have permission to do this.",
+      notFound: "This item wasn't found. It may have been removed.",
+      rateLimited: "Too many requests. Try again shortly.",
+      rateLimitedFor: "Too many requests. Try again in {seconds} seconds.",
+    },
   },
 
   nav: {
@@ -75,7 +83,7 @@ const en: typeof fa = {
     subtitle:
       "EEx Iran recomputes your electricity and gas invoice line by line, watches consumption as it happens, and tells you exactly which Toman you can get back.",
     ctaPrimary: "Get one invoice audited free",
-    ctaSecondary: "See a live dashboard",
+    ctaSecondary: "Explore the platform",
     trust: "No production changes · Persian reporting · Your data stays yours",
     stat1Label: "of controllable energy cost",
     stat1Value: "8-20%",
@@ -83,7 +91,12 @@ const en: typeof fa = {
     stat2Value: "30 days",
     stat3Label: "invoice audit every period",
     stat3Value: "Automatic",
-    liveLabel: "Live load of an industrial site",
+    liveLabel: "Sample load profile of an industrial site",
+    sample: "Sample",
+    findingReactive: "Reactive power penalty",
+    findingShift: "Shiftable peak load",
+    chartSummary:
+      "Over these 24 hours the load ranges from {min} to {max} kW. The shaded area is the evening peak band (19:00-23:00), the most expensive hours of the day.",
   },
 
   offerings: {
@@ -178,8 +191,7 @@ const en: typeof fa = {
     powerFactor: "Power factor (if you know it)",
     powerFactorUnknown: "I don't know",
     peakProduction: "We also produce during peak hours (19:00-23:00)",
-    calculate: "Calculate",
-    recalculate: "Recalculate",
+    billRequired: "Enter your average monthly bill to see an estimate",
     resultTitle: "Estimated annual saving",
     conservative: "Conservative",
     expected: "Expected",
@@ -226,10 +238,12 @@ const en: typeof fa = {
     subtitle:
       "Access to production data is the first concern factory managers raise. Both the contract and the architecture are written around it.",
     items: [
-      { title: "The factory owns the data", body: "The contract states that consumption and production data belongs to you, and can be exported or deleted at any time." },
-      { title: "Data minimisation", body: "We collect energy consumption and shift scheduling only - not your formulations, not product information." },
-      { title: "Encrypted transport", body: "Gateways send data over an encrypted, one-way channel and issue no control commands to your equipment." },
-      { title: "On-premise option", body: "Deployment on a server inside the factory or in a domestic data centre, depending on your organisation's policy." },
+      { title: "Only the data the analysis needs", body: "We keep energy consumption, invoices, shift schedules and production volume per period. Formulations, recipes and product information are never requested." },
+      { title: "Your organisation, sealed off", body: "Every request is scoped to your own organisation. An account from another company cannot see your sites, invoices or alerts - not even by guessing a page address." },
+      { title: "Permissions by role", body: "Owners and managers can change a finding's status and acknowledge alerts; analysts have view-only access." },
+      { title: "Protected login", body: "Passwords are stored only as bcrypt hashes, every login uses a signed token that expires within 12 hours, and repeated login attempts are rate-limited." },
+      { title: "A hardened web layer", body: "Security headers and a Content Security Policy restrict what a page can load or send, and public forms are protected against floods of requests and oversized submissions." },
+      { title: "Run it on your premises", body: "The platform ships as containers, so it can run on a server inside your factory or in a domestic data centre." },
     ],
   },
 
@@ -334,6 +348,13 @@ const en: typeof fa = {
     errorBody: "The request could not be sent. Please try again or call us directly.",
     another: "Send another request",
     invalidPhone: "Please enter a valid mobile number",
+    invalidEmail: "Enter an email address like name@company.com",
+    invalidBill: "Enter an amount above zero and up to 10,000 billion Toman",
+    tooShort: "Enter at least {min} characters",
+    checkField: "Please check this field",
+    checkFields: "Some details need another look. Please check the highlighted fields.",
+    networkError: "We couldn't reach the server. Check your connection and try again.",
+    rateLimitedMinutes: "Too many requests. Please try again in {minutes} minutes.",
   },
 
   footer: {
@@ -360,6 +381,9 @@ const en: typeof fa = {
     submit: "Log in",
     submitting: "Signing in",
     invalid: "Email or password is incorrect",
+    tooManyAttempts: "Too many login attempts. Please try again in {wait}.",
+    tooManyAttemptsLater: "Too many login attempts. Please try again in a little while.",
+    unreachable: "We couldn't reach the server. Please try again.",
     demoTitle: "Demo account",
     demoBody: "To see the dashboard with sample data, use this account:",
     useDemo: "Log in with the demo account",
@@ -380,6 +404,7 @@ const en: typeof fa = {
       logout: "Log out",
       account: "Account",
     },
+    viewOnly: "Analysts have view-only access. An owner or manager can change status.",
     dashboard: {
       title: "Dashboard",
       greeting: "An overview of your site portfolio",
@@ -437,6 +462,7 @@ const en: typeof fa = {
       capacityLine: "Nameplate capacity",
       feederStatus: { online: "Online", offline: "Offline" },
       backToSites: "Back to sites",
+      range: "Time range",
     },
     bills: {
       title: "Invoices",
@@ -503,6 +529,7 @@ const en: typeof fa = {
         outage_risk: "Outage risk",
       },
       noAlerts: "No alerts",
+      filter: "Review status",
     },
     savings: {
       title: "Savings",
@@ -516,6 +543,7 @@ const en: typeof fa = {
       totalVerified: "Total verified savings",
       totalKwh: "Energy saved",
       noRecords: "No periods to report yet",
+      status: "Status",
     },
     settings: {
       title: "Settings",

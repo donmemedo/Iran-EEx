@@ -1,19 +1,22 @@
 import Link from "next/link";
+import { useId } from "react";
 
 import { cn } from "@/lib/utils";
 
 export function LogoMark({ className }: { className?: string }) {
+  // The logo appears in the header and the footer; a fixed id would repeat.
+  const gradient = useId();
   return (
     <svg viewBox="0 0 48 48" className={cn("size-8", className)} aria-hidden>
       <defs>
-        <linearGradient id="logo-gradient" x1="0" y1="0" x2="1" y2="1">
+        <linearGradient id={gradient} x1="0" y1="0" x2="1" y2="1">
           <stop offset="0%" stopColor="var(--brand)" />
           <stop offset="55%" stopColor="var(--band-off)" />
           <stop offset="100%" stopColor="var(--band-mid)" />
         </linearGradient>
       </defs>
       <rect width="48" height="48" rx="12" className="fill-[var(--ink)]" />
-      <polygon points="26,4 6,28 18,28 16,44 36,20 24,20" fill="url(#logo-gradient)" />
+      <polygon points="26,4 6,28 18,28 16,44 36,20 24,20" fill={`url(#${gradient})`} />
     </svg>
   );
 }

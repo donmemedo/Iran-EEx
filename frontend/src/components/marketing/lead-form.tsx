@@ -1,18 +1,29 @@
 "use client";
 
-import { motion } from "framer-motion";
-import { CheckCircle2, Phone, Send } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { AlertCircle, CheckCircle2, Phone, Send } from "lucide-react";
+import { useRef, useState, type FormEvent } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Field, Input, Select, Textarea } from "@/components/ui/field";
-import { apiFetch } from "@/lib/api";
+import type { Dictionary } from "@/i18n";
+import type { Locale } from "@/i18n/config";
+import { API_URL } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
 import { useLocale } from "@/lib/locale-context";
 
+import {
+  LEAD_FIELDS,
+  LEAD_LIMITS,
+  isLeadField,
+  leadProblem,
+  toLatinDigits,
+  type LeadField,
+  type LeadProblem,
+} from "./lead-validation";
 import { Reveal, SectionHeading } from "./reveal";
 
+// Mirrors the backend's Industry literal.
 const INDUSTRIES = ["steel", "cement", "ceramic", "plastic", "food", "pharma", "textile", "other"] as const;
 
 const PROVINCES = [
@@ -20,48 +31,143 @@ const PROVINCES = [
   "خراسان رضوی", "خوزستان", "فارس", "کرمان", "آذربایجان شرقی", "بوشهر", "هرمزگان",
 ];
 
-type State = "idle" | "sending" | "sent" | "error";
+// When the server rejects a field the client passed, say what that field needs.
+const SERVER_PROBLEM: Partial<Record<LeadField, LeadProblem>> = {
+  phone: "invalidPhone",
+  email: "invalidEmail",
+  monthly_bill: "invalidBill",
+};
+
+type Errors = Partial<Record<LeadField, string>>;
+
+/** "Too many requests, try again in N seconds/minutes", from a Retry-After value. */
+export function rateLimitText(seconds: number | null, dict: Dictionary, locale: Locale): string {
+  if (!seconds) return dict.common.errors.rateLimited;
+  if (seconds < 60) return dict.common.errors.rateLimitedFor.replace("{seconds}", formatNumber(seconds, locale));
+  return dict.leadForm.rateLimitedMinutes.replace("{minutes}", formatNumber(Math.ceil(seconds / 60), locale));
+}
+
+// Stable, so the success heading takes focus once, when it mounts.
+function focusOnMount(node: HTMLElement | null) {
+  node?.focus();
+}
 
 export function LeadForm() {
   const { dict, locale } = useLocale();
-  const [state, setState] = useState<State>("idle");
-  const [phoneError, setPhoneError] = useState<string | null>(null);
+  const copy = dict.leadForm;
+  const [sent, setSent] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [errors, setErrors] = useState<Errors>({});
+  const [banner, setBanner] = useState<string | null>(null);
   const [bill, setBill] = useState("");
+  // State updates land a render later; the ref stops a fast double press from posting twice.
+  const pending = useRef(false);
+
+  const problemText: Record<LeadProblem, string> = {
+    required: dict.common.required,
+    tooShort: copy.tooShort.replace("{min}", formatNumber(2, locale)),
+    tooLong: copy.checkField,
+    invalidPhone: copy.invalidPhone,
+    invalidEmail: copy.invalidEmail,
+    invalidBill: copy.invalidBill,
+  };
+  const check = (name: LeadField, value: string) => {
+    const problem = leadProblem(name, value);
+    return problem ? problemText[problem] : undefined;
+  };
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const phone = String(form.get("phone") ?? "").replace(/[۰-۹]/g, (d) =>
-      String("۰۱۲۳۴۵۶۷۸۹".indexOf(d)),
-    );
+    if (pending.current) return;
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const value = (name: string) => String(data.get(name) ?? "").trim();
+    const focus = (name: LeadField) => (form.elements.namedItem(name) as HTMLElement | null)?.focus();
 
-    // Validate inline, as the user submits - not with a red wall afterwards.
-    if (!/^0?9\d{9}$/.test(phone.replace(/\D/g, ""))) {
-      setPhoneError(dict.leadForm.invalidPhone);
+    const found: Errors = {};
+    for (const name of LEAD_FIELDS) found[name] = check(name, value(name));
+    setErrors(found);
+    const firstInvalid = LEAD_FIELDS.find((name) => found[name]);
+    if (firstInvalid) {
+      setBanner(copy.checkFields);
+      focus(firstInvalid);
       return;
     }
-    setPhoneError(null);
-    setState("sending");
 
+    pending.current = true;
+    setSending(true);
+    setBanner(null);
     try {
-      await apiFetch("/api/v1/leads", {
+      // fetch rather than apiFetch: a 422 names its fields only in the body.
+      const response = await fetch(`${API_URL}/api/v1/leads`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          company: form.get("company"),
-          contact_name: form.get("contact_name"),
-          phone: phone.replace(/\D/g, ""),
-          email: form.get("email") || null,
-          industry: form.get("industry"),
-          province: form.get("province"),
-          monthly_bill: bill ? Number(bill.replace(/\D/g, "")) : null,
-          message: form.get("message") || null,
+          company: value("company"),
+          contact_name: value("contact_name"),
+          phone: toLatinDigits(value("phone")),
+          email: value("email") || null,
+          industry: value("industry"),
+          province: value("province"),
+          monthly_bill: bill ? Number(bill) : null,
+          message: value("message") || null,
           locale,
         }),
       });
-      setState("sent");
+      if (response.ok) {
+        setSent(true);
+        return;
+      }
+      if (response.status === 422) {
+        const body = await response.json().catch(() => null);
+        const issues: { loc?: unknown[] }[] = Array.isArray(body?.detail) ? body.detail : [];
+        const server: Errors = {};
+        for (const issue of issues) {
+          const name = issue.loc?.[issue.loc.length - 1];
+          if (isLeadField(name)) {
+            const problem = SERVER_PROBLEM[name];
+            server[name] = problem ? problemText[problem] : copy.checkField;
+          }
+        }
+        setErrors(server);
+        const first = LEAD_FIELDS.find((name) => server[name]);
+        // A rejected field the form does not show (industry, province) has no
+        // field to flag, so say the request failed rather than show nothing.
+        setBanner(first ? copy.checkFields : copy.errorBody);
+        if (first) focus(first);
+        return;
+      }
+      setBanner(
+        response.status === 429
+          ? rateLimitText(Number(response.headers.get("Retry-After")) || null, dict, locale)
+          : copy.errorBody,
+      );
     } catch {
-      setState("error");
+      setBanner(copy.networkError);
+    } finally {
+      pending.current = false;
+      setSending(false);
     }
+  }
+
+  // Inline validation: a field is checked when focus leaves it, and once flagged
+  // its message clears the moment the value is fixed. An empty required field
+  // is not flagged on blur - tabbing past it is not a mistake - only on submit.
+  function onFieldBlur(target: EventTarget) {
+    const { name, value } = target as HTMLInputElement;
+    if (!isLeadField(name) || (!value.trim() && !errors[name])) return;
+    setErrors((current) => ({ ...current, [name]: check(name, value) }));
+  }
+  function onFieldChange(target: EventTarget) {
+    const { name, value } = target as HTMLInputElement;
+    if (isLeadField(name) && errors[name]) setErrors((current) => ({ ...current, [name]: check(name, value) }));
+  }
+
+  function reset() {
+    setSent(false);
+    setBill("");
+    setErrors({});
+    setBanner(null);
   }
 
   return (
@@ -70,18 +176,18 @@ export function LeadForm() {
         <div className="grid gap-12 lg:grid-cols-[1fr_1.25fr] lg:gap-16">
           <div>
             <SectionHeading
-              eyebrow={dict.leadForm.eyebrow}
-              title={dict.leadForm.title}
-              subtitle={dict.leadForm.subtitle}
+              eyebrow={copy.eyebrow}
+              title={copy.title}
+              subtitle={copy.subtitle}
               align="start"
             />
             <Reveal delay={0.1} className="mt-8">
               <a
                 href="tel:+982100000000"
-                className="inline-flex items-center gap-3 rounded-[--radius-lg] border border-line bg-surface-2 p-4 transition-colors duration-150 hover:border-brand/30"
+                className="inline-flex items-center gap-3 rounded-lg border border-line bg-surface-2 p-4 transition-[border-color,scale] duration-150 ease-[var(--ease-out)] hover:border-brand/30 active:scale-[0.98]"
               >
                 <span className="flex size-10 items-center justify-center rounded-full bg-brand-soft text-brand">
-                  <Phone className="size-4" />
+                  <Phone className="size-4" aria-hidden />
                 </span>
                 <span className="flex flex-col">
                   <span className="text-xs text-ink-3">{dict.footer.contact}</span>
@@ -95,54 +201,76 @@ export function LeadForm() {
 
           <Reveal delay={0.08}>
             <Card className="p-6 sm:p-8">
-              {state === "sent" ? (
-                <motion.div
-                  initial={{ opacity: 0, scale: 0.97 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ duration: 0.4, ease: [0.23, 1, 0.32, 1] }}
-                  className="flex flex-col items-center py-10 text-center"
-                >
+              {sent ? (
+                // Grows in from its own centre; Reduce Motion collapses the transition.
+                <div className="flex flex-col items-center py-10 text-center transition-[opacity,scale] duration-400 ease-[var(--ease-out)] starting:scale-97 starting:opacity-0">
                   <span className="flex size-14 items-center justify-center rounded-full bg-good/10 text-good">
-                    <CheckCircle2 className="size-7" />
+                    <CheckCircle2 className="size-7" aria-hidden />
                   </span>
-                  <h3 className="mt-5 text-base font-semibold text-ink">
-                    {dict.leadForm.successTitle}
+                  {/* Focus moves here so keyboard and screen-reader users hear the outcome. */}
+                  <h3 ref={focusOnMount} tabIndex={-1} className="mt-5 text-base font-semibold text-ink outline-none">
+                    {copy.successTitle}
                   </h3>
-                  <p className="mt-2 max-w-sm text-sm leading-relaxed text-ink-2">
-                    {dict.leadForm.successBody}
-                  </p>
-                  <Button variant="secondary" className="mt-6" onClick={() => setState("idle")}>
-                    {dict.leadForm.another}
+                  <p className="mt-2 max-w-sm text-sm leading-relaxed text-ink-2">{copy.successBody}</p>
+                  <Button variant="secondary" className="mt-6" onClick={reset}>
+                    {copy.another}
                   </Button>
-                </motion.div>
+                </div>
               ) : (
-                <form onSubmit={onSubmit} className="grid gap-4 sm:grid-cols-2">
-                  <Field label={dict.leadForm.company} className="sm:col-span-2">
-                    <Input name="company" required minLength={2} autoComplete="organization" />
+                <form
+                  onSubmit={onSubmit}
+                  onBlur={(event) => onFieldBlur(event.target)}
+                  onChange={(event) => onFieldChange(event.target)}
+                  noValidate
+                  className="grid gap-4 sm:grid-cols-2"
+                >
+                  <Field label={copy.company} error={errors.company} className="sm:col-span-2">
+                    <Input
+                      name="company"
+                      required
+                      maxLength={LEAD_LIMITS.company}
+                      autoComplete="organization"
+                      aria-invalid={!!errors.company || undefined}
+                    />
                   </Field>
 
-                  <Field label={dict.leadForm.contactName}>
-                    <Input name="contact_name" required minLength={2} autoComplete="name" />
+                  <Field label={copy.contactName} error={errors.contact_name}>
+                    <Input
+                      name="contact_name"
+                      required
+                      maxLength={LEAD_LIMITS.contact_name}
+                      autoComplete="name"
+                      aria-invalid={!!errors.contact_name || undefined}
+                    />
                   </Field>
 
-                  <Field label={dict.leadForm.phone} error={phoneError}>
+                  <Field label={copy.phone} error={errors.phone}>
                     <Input
                       name="phone"
+                      type="tel"
                       required
+                      maxLength={LEAD_LIMITS.phone}
                       inputMode="tel"
                       autoComplete="tel"
                       dir="ltr"
                       placeholder="09121234567"
                       className="tabular"
-                      onChange={() => phoneError && setPhoneError(null)}
+                      aria-invalid={!!errors.phone || undefined}
                     />
                   </Field>
 
-                  <Field label={dict.leadForm.email}>
-                    <Input name="email" type="email" autoComplete="email" dir="ltr" />
+                  <Field label={copy.email} error={errors.email}>
+                    <Input
+                      name="email"
+                      type="email"
+                      maxLength={LEAD_LIMITS.email}
+                      autoComplete="email"
+                      dir="ltr"
+                      aria-invalid={!!errors.email || undefined}
+                    />
                   </Field>
 
-                  <Field label={dict.leadForm.industry}>
+                  <Field label={copy.industry}>
                     <Select name="industry" defaultValue="steel">
                       {INDUSTRIES.map((key) => (
                         <option key={key} value={key}>
@@ -152,7 +280,7 @@ export function LeadForm() {
                     </Select>
                   </Field>
 
-                  <Field label={dict.leadForm.province}>
+                  <Field label={copy.province}>
                     <Select name="province" defaultValue={PROVINCES[0]}>
                       {PROVINCES.map((province) => (
                         <option key={province} value={province}>
@@ -162,33 +290,48 @@ export function LeadForm() {
                     </Select>
                   </Field>
 
-                  <Field label={dict.leadForm.monthlyBill}>
+                  <Field label={copy.monthlyBill} error={errors.monthly_bill}>
                     <Input
                       name="monthly_bill"
                       inputMode="numeric"
                       className="tabular"
-                      value={bill ? formatNumber(Number(bill.replace(/\D/g, "")) || 0, locale) : ""}
-                      onChange={(event) => setBill(event.target.value)}
+                      aria-invalid={!!errors.monthly_bill || undefined}
+                      value={bill ? formatNumber(Number(bill), locale) : ""}
+                      // Persian keyboards type Persian digits, and the field shows
+                      // them too, so normalise before keeping only the digits.
+                      onChange={(event) =>
+                        setBill(toLatinDigits(event.target.value).replace(/\D/g, "").replace(/^0+/, "").slice(0, 15))
+                      }
                     />
                   </Field>
 
-                  <Field label={dict.leadForm.message} className="sm:col-span-2">
-                    <Textarea name="message" rows={3} placeholder={dict.leadForm.messagePlaceholder} />
+                  <Field label={copy.message} error={errors.message} className="sm:col-span-2">
+                    <Textarea
+                      name="message"
+                      rows={3}
+                      maxLength={LEAD_LIMITS.message}
+                      placeholder={copy.messagePlaceholder}
+                      aria-invalid={!!errors.message || undefined}
+                    />
                   </Field>
 
-                  {state === "error" && (
-                    <p className="text-xs text-critical sm:col-span-2">{dict.leadForm.errorBody}</p>
-                  )}
-
-                  <Button
-                    type="submit"
-                    size="lg"
-                    loading={state === "sending"}
-                    className="sm:col-span-2"
-                  >
-                    {state !== "sending" && <Send className="size-4" />}
-                    {state === "sending" ? dict.leadForm.submitting : dict.leadForm.submit}
-                  </Button>
+                  <div className="sm:col-span-2">
+                    {/* Always mounted, so the polite announcement fires when a
+                        message arrives. The "check the fields" summary goes
+                        once the flagged fields are fixed. */}
+                    <div role="status">
+                      {banner && (banner !== copy.checkFields || Object.values(errors).some(Boolean)) && (
+                        <p className="mb-4 flex items-start gap-2 text-xs leading-relaxed text-ink">
+                          <AlertCircle className="mt-0.5 size-4 shrink-0 text-critical" aria-hidden />
+                          {banner}
+                        </p>
+                      )}
+                    </div>
+                    <Button type="submit" size="lg" loading={sending} className="w-full">
+                      {!sending && <Send className="size-4 rtl:-scale-x-100" aria-hidden />}
+                      {sending ? copy.submitting : copy.submit}
+                    </Button>
+                  </div>
                 </form>
               )}
             </Card>

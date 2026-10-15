@@ -29,16 +29,23 @@ export interface ReferenceLine {
   tone?: "critical" | "neutral";
 }
 
+// A stable default: a fresh `[]` per render would invalidate the geometry memo.
+const NO_LINES: ReferenceLine[] = [];
+
 /**
  * The load profile: a single-series area chart with tariff-band shading behind
  * it and a crosshair readout. One series means no legend box - the card title
  * names it - but the band strip underneath does carry a legend, because it is
  * three categories.
+ *
+ * The SVG is hidden from assistive technology; a visually hidden table carries
+ * the same readings, so a screen reader gets the data rather than a picture.
  */
 export function LoadChart({
   points,
+  label,
   height = 260,
-  referenceLines = [],
+  referenceLines = NO_LINES,
   formatValue,
   formatAxisValue,
   formatLabel,
@@ -47,6 +54,8 @@ export function LoadChart({
   showBandStrip = true,
 }: {
   points: LoadPoint[];
+  /** What the chart shows; captions the accessible data table. */
+  label?: string;
   height?: number;
   referenceLines?: ReferenceLine[];
   formatValue: (value: number) => string;
@@ -80,8 +89,54 @@ export function LoadChart({
     const x = linearScale([0, Math.max(points.length - 1, 1)], [padding.left, padding.left + plotWidth]);
     const y = linearScale([0, max], [padding.top + plotHeight, padding.top]);
     const coords = points.map((point, index) => ({ x: x(index), y: y(point.value) }));
-    return { x, y, coords, ticks, max, xs: coords.map((c) => c.x) };
+    // Contiguous runs of the same band, drawn as one strip segment each.
+    const bandRuns: { band: string; from: number; to: number }[] = [];
+    points.forEach((point, index) => {
+      const band = point.band ?? "mid_peak";
+      const last = bandRuns[bandRuns.length - 1];
+      if (last && last.band === band) last.to = index;
+      else bandRuns.push({ band, from: index, to: index });
+    });
+    return {
+      x,
+      y,
+      coords,
+      ticks,
+      max,
+      xs: coords.map((c) => c.x),
+      line: smoothPath(coords),
+      area: areaPath(coords, padding.top + plotHeight),
+      bandRuns,
+    };
   }, [points, plotWidth, plotHeight, padding.left, padding.top, referenceLines]);
+
+  // Rebuilt only when the data changes, not on every crosshair move.
+  const table = useMemo(
+    () => (
+      <table className="sr-only">
+        {label && <caption>{label}</caption>}
+        <thead>
+          <tr>
+            <th scope="col">{dict.chart.time}</th>
+            <th scope="col">{dict.chart.value}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {points.map((point) => (
+            <tr key={point.ts}>
+              <th scope="row">{formatLabel(point.ts)}</th>
+              <td>
+                {formatValue(point.value)}
+                {unit && ` ${unit}`}
+                {point.band && ` (${dict.bands[point.band as keyof typeof dict.bands]})`}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    ),
+    [points, label, unit, formatLabel, formatValue, dict],
+  );
 
   if (points.length === 0) {
     return (
@@ -98,29 +153,20 @@ export function LoadChart({
   const active = hover !== null ? points[hover] : null;
   const activeCoord = hover !== null && geometry ? geometry.coords[hover] : null;
 
-  // Contiguous runs of the same band, drawn as one strip segment each.
-  const bandRuns: { band: string; from: number; to: number }[] = [];
-  if (showBandStrip) {
-    points.forEach((point, index) => {
-      const band = point.band ?? "mid_peak";
-      const last = bandRuns[bandRuns.length - 1];
-      if (last && last.band === band) last.to = index;
-      else bandRuns.push({ band, from: index, to: index });
-    });
-  }
-
   const tooltipOnRight = activeCoord ? activeCoord.x < padding.left + plotWidth / 2 : true;
 
   return (
     <div ref={ref} className={cn("relative", className)} style={{ height }}>
+      {table}
       {width > 0 && geometry && (
         <>
+          {/* Absolutely positioned, so the measured width never feeds back into
+              the container's own min-content size inside a grid or flex row. */}
           <svg
             width={width}
             height={height}
-            role="img"
-            aria-label={dict.app.dashboard.portfolioLoad}
-            className="overflow-visible"
+            aria-hidden
+            className="absolute inset-0 overflow-visible"
           >
             <defs>
               <linearGradient id="load-fill" x1="0" y1="0" x2="0" y2="1">
@@ -177,9 +223,9 @@ export function LoadChart({
               </g>
             ))}
 
-            <path d={areaPath(geometry.coords, padding.top + plotHeight)} fill="url(#load-fill)" />
+            <path d={geometry.area} fill="url(#load-fill)" />
             <path
-              d={smoothPath(geometry.coords)}
+              d={geometry.line}
               fill="none"
               stroke="var(--brand)"
               strokeWidth={2}
@@ -204,7 +250,7 @@ export function LoadChart({
             )}
 
             {showBandStrip &&
-              bandRuns.map((run) => {
+              geometry.bandRuns.map((run) => {
                 const x1 = geometry.x(run.from);
                 const x2 = geometry.x(run.to);
                 return (
@@ -256,7 +302,7 @@ export function LoadChart({
 
           {active && activeCoord && (
             <div
-              className="pointer-events-none absolute z-10 min-w-32 rounded-[--radius-md] border border-line bg-glass glass px-3 py-2 shadow-[var(--shadow-md)]"
+              className="pointer-events-none absolute z-10 min-w-32 rounded-md border border-line bg-glass glass px-3 py-2 shadow-[var(--shadow-md)]"
               style={{
                 left: tooltipOnRight ? activeCoord.x + 12 : undefined,
                 right: tooltipOnRight ? undefined : width - activeCoord.x + 12,

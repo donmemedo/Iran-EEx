@@ -16,7 +16,6 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
-COPY tests ./tests
 
 RUN useradd --create-home --uid 1001 eex && chown -R eex:eex /app
 USER eex

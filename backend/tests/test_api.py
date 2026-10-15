@@ -1,56 +1,17 @@
 """API and engine tests."""
-import os
-import sys
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlmodel import Session, SQLModel, create_engine
-from sqlmodel.pool import StaticPool
+from conftest import login
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from app.database import get_session  # noqa: E402
-from app.main import app  # noqa: E402
-from app.seed import seed  # noqa: E402
-from app.services.bill_audit import audit_bill  # noqa: E402
-from app.services.jalali import from_date, gregorian_to_jalali, jalali_to_gregorian  # noqa: E402
-from app.services.tariff import BillInput, compute_bill  # noqa: E402
-from app.services.timeseries import SiteProfile, sample, series  # noqa: E402
-
-
-@pytest.fixture(name="client")
-def client_fixture():
-    engine = create_engine(
-        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
-    )
-    SQLModel.metadata.create_all(engine)
-
-    def override():
-        with Session(engine) as session:
-            yield session
-
-    with Session(engine) as session:
-        # A small slice of the demo portfolio keeps the suite fast.
-        import app.seed as seed_module
-
-        original = seed_module.SITES
-        seed_module.SITES = original[:2]
-        try:
-            seed(session)
-        finally:
-            seed_module.SITES = original
-
-    app.dependency_overrides[get_session] = override
-    with TestClient(app) as c:
-        yield c
-    app.dependency_overrides.clear()
+from app.services.bill_audit import audit_bill
+from app.services.jalali import gregorian_to_jalali, jalali_to_gregorian
+from app.services.tariff import BillInput, compute_bill
+from app.services.timeseries import SiteProfile, series
 
 
 def auth_headers(client) -> dict:
-    r = client.post("/api/v1/auth/login", json={"email": "demo@eex.ir", "password": "demo1234"})
-    assert r.status_code == 200, r.text
-    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+    return login(client, "demo@eex.ir")
 
 
 # --- tariff -----------------------------------------------------------------
@@ -229,10 +190,12 @@ def test_finding_status_can_be_updated(client):
 
 def test_alert_acknowledge(client):
     headers = auth_headers(client)
-    alerts = client.get("/api/v1/alerts", headers=headers).json()
-    if alerts:
-        r = client.post(f"/api/v1/alerts/{alerts[0]['id']}/acknowledge", headers=headers)
-        assert r.status_code == 200 and r.json()["acknowledged"] is True
+    alerts = client.get("/api/v1/alerts?acknowledged=false", headers=headers).json()
+    assert alerts, "the fixture guarantees one unacknowledged alert"
+    before = client.get("/api/v1/alerts/count", headers=headers).json()["unacknowledged"]
+    r = client.post(f"/api/v1/alerts/{alerts[0]['id']}/acknowledge", headers=headers)
+    assert r.status_code == 200 and r.json()["acknowledged"] is True
+    assert client.get("/api/v1/alerts/count", headers=headers).json()["unacknowledged"] == before - 1
 
 
 def test_public_calculator_stays_in_the_claimed_band(client):

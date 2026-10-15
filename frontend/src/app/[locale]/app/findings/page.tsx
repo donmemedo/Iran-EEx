@@ -5,13 +5,21 @@ import Link from "next/link";
 import { useState } from "react";
 import useSWR from "swr";
 
-import { EmptyState, PageHeader } from "@/components/app/pieces";
+import {
+  EmptyState,
+  ErrorState,
+  InlineError,
+  PageHeader,
+  useCanEdit,
+  useOptimisticAction,
+  ViewOnlyNote,
+} from "@/components/app/pieces";
 import { Badge, findingStatusTone, severityTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Segmented } from "@/components/ui/field";
 import { Skeleton } from "@/components/ui/skeleton";
-import { apiFetch, type Finding, type Site } from "@/lib/api";
+import { apiFetch, type Finding, type FindingStatus, type Site } from "@/lib/api";
 import { formatNumber, formatPercent, splitToman } from "@/lib/format";
 import { useLocale, useLocalized } from "@/lib/locale-context";
 
@@ -22,16 +30,28 @@ export default function FindingsPage() {
   const [severity, setSeverity] = useState<"" | "high" | "medium" | "low">("");
 
   const query = `/api/v1/findings?status=${status}${severity ? `&severity=${severity}` : ""}&limit=200`;
-  const { data: findings, isLoading, mutate } = useSWR<Finding[]>(query);
+  const { data: findings, error, isLoading, mutate } = useSWR<Finding[]>(query);
   const { data: sites } = useSWR<Site[]>("/api/v1/sites");
   const siteById = new Map((sites ?? []).map((site) => [site.id, site]));
+  const canEdit = useCanEdit();
+  const { run, failure } = useOptimisticAction();
 
   const total = (findings ?? []).reduce((sum, finding) => sum + finding.annual_saving, 0);
   const totalMoney = splitToman(total, locale, dict.common);
 
-  async function setFindingStatus(id: number, next: string) {
-    await apiFetch(`/api/v1/findings/${id}?status=${next}`, { method: "PATCH" });
-    void mutate();
+  // The card leaves this filtered list on the press; it comes back with an
+  // inline error if the server refuses the change.
+  function setFindingStatus(id: number, next: FindingStatus) {
+    void run(
+      id,
+      mutate,
+      () => apiFetch(`/api/v1/findings/${id}?status=${next}`, { method: "PATCH" }),
+      (list) =>
+        list
+          .map((finding) => (finding.id === id ? { ...finding, status: next } : finding))
+          .filter((finding) => finding.status === status),
+      ["/api/v1/findings", "/api/v1/dashboard", "/api/v1/sites"],
+    );
   }
 
   return (
@@ -52,6 +72,7 @@ export default function FindingsPage() {
 
       <div className="mb-5 flex flex-wrap gap-3">
         <Segmented
+          label={dict.app.findings.filterStatus}
           value={status}
           onChange={setStatus}
           options={[
@@ -61,6 +82,7 @@ export default function FindingsPage() {
           ]}
         />
         <Segmented
+          label={dict.app.findings.filterSeverity}
           value={severity}
           onChange={setSeverity}
           options={[
@@ -71,7 +93,11 @@ export default function FindingsPage() {
         />
       </div>
 
-      {isLoading ? (
+      {!canEdit && <ViewOnlyNote className="mb-4" />}
+
+      {error && !findings ? (
+        <ErrorState error={error} onRetry={() => mutate()} />
+      ) : isLoading ? (
         <Skeleton className="h-96 w-full" />
       ) : !findings || findings.length === 0 ? (
         <EmptyState message={dict.app.findings.noFindings} icon={Sparkles} />
@@ -99,7 +125,7 @@ export default function FindingsPage() {
                     {site && (
                       <Link
                         href={href(`/app/sites/${site.id}`)}
-                        className="mt-1 inline-block text-[0.6875rem] text-ink-3 hover:text-brand"
+                        className="tap-target mt-1 inline-block rounded-xs text-[0.6875rem] text-ink-3 hover:text-brand"
                       >
                         {pick(site, "name")} · {pick(site, "province")}
                       </Link>
@@ -109,7 +135,7 @@ export default function FindingsPage() {
                       {pick(finding, "detail")}
                     </p>
 
-                    <div className="mt-3.5 rounded-[--radius-md] border border-line bg-surface-2 p-3.5">
+                    <div className="mt-3.5 rounded-md border border-line bg-surface-2 p-3.5">
                       <div className="flex items-start gap-2">
                         <Lightbulb className="mt-0.5 size-3.5 shrink-0 text-brand" />
                         <div>
@@ -126,7 +152,7 @@ export default function FindingsPage() {
 
                   <div className="shrink-0 text-end">
                     <div className="flex items-center justify-end gap-1.5 text-brand">
-                      <TrendingDown className="size-4" />
+                      <TrendingDown className="size-4 rtl:-scale-x-100" />
                       <span className="text-xl font-bold tabular">{saving.value}</span>
                     </div>
                     <div className="text-[0.625rem] text-ink-3">
@@ -161,28 +187,32 @@ export default function FindingsPage() {
                   </div>
                 </div>
 
-                <div className="mt-4 flex flex-wrap gap-2 border-t border-line pt-4">
-                  {finding.status !== "in_progress" && finding.status !== "done" && (
-                    <Button size="sm" variant="secondary" onClick={() => setFindingStatus(finding.id, "in_progress")}>
-                      {dict.app.findings.markInProgress}
-                    </Button>
-                  )}
-                  {finding.status !== "done" && (
-                    <Button size="sm" onClick={() => setFindingStatus(finding.id, "done")}>
-                      {dict.app.findings.markDone}
-                    </Button>
-                  )}
-                  {finding.status === "done" && (
-                    <Button size="sm" variant="secondary" onClick={() => setFindingStatus(finding.id, "open")}>
-                      {dict.app.findings.reopen}
-                    </Button>
-                  )}
-                  {finding.status === "open" && (
-                    <Button size="sm" variant="ghost" onClick={() => setFindingStatus(finding.id, "dismissed")}>
-                      {dict.app.findings.dismiss}
-                    </Button>
-                  )}
-                </div>
+                {failure?.id === finding.id && <InlineError message={failure.message} className="mt-4" />}
+
+                {canEdit && (
+                  <div className="mt-4 flex flex-wrap gap-2 border-t border-line pt-4">
+                    {finding.status !== "in_progress" && finding.status !== "done" && (
+                      <Button size="sm" variant="secondary" onClick={() => setFindingStatus(finding.id, "in_progress")}>
+                        {dict.app.findings.markInProgress}
+                      </Button>
+                    )}
+                    {finding.status !== "done" && (
+                      <Button size="sm" onClick={() => setFindingStatus(finding.id, "done")}>
+                        {dict.app.findings.markDone}
+                      </Button>
+                    )}
+                    {finding.status === "done" && (
+                      <Button size="sm" variant="secondary" onClick={() => setFindingStatus(finding.id, "open")}>
+                        {dict.app.findings.reopen}
+                      </Button>
+                    )}
+                    {finding.status === "open" && (
+                      <Button size="sm" variant="ghost" onClick={() => setFindingStatus(finding.id, "dismissed")}>
+                        {dict.app.findings.dismiss}
+                      </Button>
+                    )}
+                  </div>
+                )}
               </Card>
             );
           })}

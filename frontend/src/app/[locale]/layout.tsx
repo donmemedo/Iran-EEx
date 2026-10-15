@@ -6,6 +6,7 @@ import "@fontsource-variable/inter";
 import "../globals.css";
 
 import { Providers } from "@/components/providers";
+import { ServiceWorkerRegister } from "@/components/sw-register";
 import { getDictionary } from "@/i18n";
 import { isLocale, locales, localeMeta, type Locale } from "@/i18n/config";
 
@@ -72,17 +73,7 @@ export default async function LocaleLayout({
         <Providers locale={locale as Locale} dict={dict}>
           {children}
         </Providers>
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `
-              if ('serviceWorker' in navigator) {
-                window.addEventListener('load', function () {
-                  navigator.serviceWorker.register('/sw.js').catch(function () {});
-                });
-              }
-            `,
-          }}
-        />
+        <ServiceWorkerRegister />
       </body>
     </html>
   );

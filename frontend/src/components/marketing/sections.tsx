@@ -3,20 +3,22 @@
 import {
   Activity,
   BadgeCheck,
+  Building2,
   Check,
   ChevronDown,
+  Database,
   FileSearch,
   Gauge,
-  Lock,
-  Minus,
+  KeyRound,
   Receipt,
   Server,
   ShieldCheck,
   Timer,
   TrendingDown,
+  UserCheck,
   Zap,
 } from "lucide-react";
-import { useState } from "react";
+import { useId, useState } from "react";
 
 import { ButtonLink } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -28,7 +30,8 @@ import { Reveal, SectionHeading } from "./reveal";
 
 const OFFERING_ICONS = [FileSearch, Activity, BadgeCheck];
 const LEVER_ICONS = [Receipt, Zap, Gauge, TrendingDown];
-const SECURITY_ICONS = [ShieldCheck, Minus, Lock, Server];
+// One per dict.security.items entry, in the same order.
+const SECURITY_ICONS = [Database, Building2, UserCheck, KeyRound, ShieldCheck, Server];
 
 export function Offerings() {
   const { dict } = useLocale();
@@ -47,12 +50,15 @@ export function Offerings() {
             const Icon = OFFERING_ICONS[index];
             return (
               <Reveal key={item.title} delay={index * 0.08} as="article">
-                <Card className="group h-full p-6 transition-[transform,box-shadow,border-color] duration-300 ease-[var(--ease-out)] hover:-translate-y-1 hover:border-brand/30 hover:shadow-[var(--shadow-lg)]">
+                {/* Static: these cards are not links, so they do not lift on hover. */}
+                <Card className="h-full p-6">
                   <div className="flex items-center justify-between">
-                    <span className="flex size-11 items-center justify-center rounded-[--radius-md] border border-line bg-surface-2 text-brand transition-colors duration-300 group-hover:border-brand/30 group-hover:bg-brand-soft">
+                    <span className="flex size-11 items-center justify-center rounded-md border border-line bg-surface-2 text-brand">
                       <Icon className="size-5" />
                     </span>
-                    <span className="text-2xl font-bold text-ink-3/40 tabular">{item.tag}</span>
+                    <span className="text-2xl font-bold text-ink-3/40 tabular" aria-hidden>
+                      {item.tag}
+                    </span>
                   </div>
                   <h3 className="mt-5 text-base font-semibold tracking-tight text-ink">{item.title}</h3>
                   <p className="mt-2.5 text-sm leading-relaxed text-ink-2">{item.body}</p>
@@ -87,12 +93,12 @@ export function Levers() {
           align="start"
         />
 
-        <div className="mt-12 grid gap-px overflow-hidden rounded-[--radius-lg] border border-line bg-line sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mt-12 grid gap-px overflow-hidden rounded-lg border border-line bg-line sm:grid-cols-2 lg:grid-cols-4">
           {dict.levers.items.map((item, index) => {
             const Icon = LEVER_ICONS[index];
             return (
               <Reveal key={item.title} delay={index * 0.06} as="article">
-                <div className="group h-full bg-surface p-6 transition-colors duration-300 hover:bg-surface-2">
+                <div className="h-full bg-surface p-6">
                   <Icon className="size-5 text-brand" />
                   <h3 className="mt-4 text-sm font-semibold text-ink">{item.title}</h3>
                   <p className="mt-2 text-xs leading-relaxed text-ink-2">{item.body}</p>
@@ -107,7 +113,7 @@ export function Levers() {
 }
 
 export function HowItWorks() {
-  const { dict } = useLocale();
+  const { dict, locale } = useLocale();
 
   return (
     <section id="how" className="scroll-mt-24 py-20 sm:py-28">
@@ -118,16 +124,21 @@ export function HowItWorks() {
           subtitle={dict.how.subtitle}
         />
 
-        <ol className="relative mt-14 grid gap-8 md:grid-cols-4 md:gap-5">
+        <div className="relative mt-14">
           {/* The connecting rail sits behind the markers on wide screens. */}
           <div
             className="absolute inset-x-0 top-5 hidden h-px bg-gradient-to-r from-transparent via-line-strong to-transparent md:block"
             aria-hidden
           />
+          <ol className="grid gap-8 md:grid-cols-4 md:gap-5">
           {dict.how.steps.map((step, index) => (
             <Reveal key={step.title} delay={index * 0.08} as="li" className="relative">
-              <div className="flex size-10 items-center justify-center rounded-full border border-line bg-surface text-sm font-bold text-brand shadow-[var(--shadow-sm)]">
-                {formatNumberFallback(index + 1)}
+              {/* The list already announces the position, so the marker is visual only. */}
+              <div
+                className="flex size-10 items-center justify-center rounded-full border border-line bg-surface text-sm font-bold tabular text-brand shadow-[var(--shadow-sm)]"
+                aria-hidden
+              >
+                {formatNumber(index + 1, locale)}
               </div>
               <div className="mt-4 flex items-center gap-2">
                 <Timer className="size-3.5 text-ink-3" />
@@ -137,14 +148,11 @@ export function HowItWorks() {
               <p className="mt-2 text-xs leading-relaxed text-ink-2">{step.body}</p>
             </Reveal>
           ))}
-        </ol>
+          </ol>
+        </div>
       </div>
     </section>
   );
-}
-
-function formatNumberFallback(value: number) {
-  return value;
 }
 
 const BENCHMARKS: Record<string, number> = {
@@ -178,15 +186,15 @@ export function Industries() {
               <h3 className="text-sm font-semibold text-ink">{dict.industries.benchmarkLabel}</h3>
               <span className="text-[0.6875rem] text-ink-3">{dict.industries.unitLabel}</span>
             </div>
-            <ul className="divide-y divide-[var(--line)]">
+            <ul className="divide-y divide-line">
               {entries.map(([key, value], index) => (
-                <li key={key} className="flex items-center gap-4 p-4 transition-colors hover:bg-surface-2">
+                <li key={key} className="flex items-center gap-4 p-4">
                   <span className="w-32 shrink-0 text-xs font-medium text-ink sm:w-44 sm:text-sm">
                     {dict.industries.items[key as keyof typeof dict.industries.items]}
                   </span>
-                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-surface-3">
+                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-surface-3" aria-hidden>
                     <div
-                      className="h-full rounded-e-full transition-[width] duration-700 ease-[var(--ease-out)]"
+                      className="h-full rounded-e-full"
                       style={{
                         width: `${(value / max) * 100}%`,
                         background: index % 2 === 0 ? "var(--band-mid)" : "var(--band-off)",
@@ -218,6 +226,7 @@ export function Security() {
             title={dict.security.title}
             subtitle={dict.security.subtitle}
             align="start"
+            className="lg:sticky lg:top-24 lg:self-start"
           />
 
           <div className="grid gap-4 sm:grid-cols-2">
@@ -264,13 +273,13 @@ export function Pricing() {
                   )}
                 >
                   {featured && (
-                    <span className="absolute -top-3 inset-inline-start-6 rounded-full bg-brand px-3 py-1 text-[0.625rem] font-semibold text-brand-ink shadow-[var(--shadow-sm)]">
+                    <span className="absolute -top-3 start-6 rounded-full bg-brand px-3 py-1 text-[0.625rem] font-semibold text-brand-ink shadow-[var(--shadow-sm)]">
                       {dict.pricing.popular}
                     </span>
                   )}
                   <h3 className="text-sm font-semibold text-ink">{plan.name}</h3>
                   <div className="mt-4 flex items-baseline gap-1.5">
-                    <span className="text-2xl font-bold tracking-tight text-ink">{plan.price}</span>
+                    <span className="text-2xl font-bold tracking-tight tabular text-ink">{plan.price}</span>
                   </div>
                   <p className="mt-1 text-[0.6875rem] text-ink-3">{plan.period}</p>
                   <p className="mt-4 text-xs leading-relaxed text-ink-2">{plan.body}</p>
@@ -302,31 +311,43 @@ export function Pricing() {
 export function Faq() {
   const { dict } = useLocale();
   const [open, setOpen] = useState<number | null>(0);
+  const id = useId();
 
   return (
     <section className="py-20 sm:py-28">
       <div className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8">
         <SectionHeading eyebrow={dict.faq.eyebrow} title={dict.faq.title} />
 
-        <div className="mt-12 divide-y divide-[var(--line)] border-y border-line">
+        <div className="mt-12 divide-y divide-line border-y border-line">
           {dict.faq.items.map((item, index) => {
             const expanded = open === index;
+            const panelId = `${id}-${index}`;
             return (
               <div key={item.q}>
-                <button
-                  onClick={() => setOpen(expanded ? null : index)}
-                  aria-expanded={expanded}
-                  className="flex w-full items-center justify-between gap-4 py-5 text-start transition-colors duration-150 hover:text-brand"
-                >
-                  <span className="text-sm font-medium text-ink">{item.q}</span>
-                  <ChevronDown
-                    className={cn(
-                      "size-4 shrink-0 text-ink-3 transition-transform duration-250 ease-[var(--ease-out)]",
-                      expanded && "rotate-180",
-                    )}
-                  />
-                </button>
+                <h3>
+                  <button
+                    type="button"
+                    onClick={() => setOpen(expanded ? null : index)}
+                    aria-expanded={expanded}
+                    aria-controls={panelId}
+                    className="group flex w-full items-center justify-between gap-4 py-5 text-start"
+                  >
+                    <span className="text-sm font-medium text-ink transition-colors duration-150 group-hover:text-brand">
+                      {item.q}
+                    </span>
+                    <ChevronDown
+                      className={cn(
+                        "size-4 shrink-0 text-ink-3 transition-transform duration-250 ease-[var(--ease-out)]",
+                        expanded && "rotate-180",
+                      )}
+                    />
+                  </button>
+                </h3>
+                {/* Collapsed answers stay in the DOM for the height animation, so
+                    inert keeps them out of the reading order until opened. */}
                 <div
+                  id={panelId}
+                  inert={!expanded}
                   className="grid transition-[grid-template-rows] duration-300 ease-[var(--ease-out)]"
                   style={{ gridTemplateRows: expanded ? "1fr" : "0fr" }}
                 >

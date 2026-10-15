@@ -15,7 +15,7 @@ from .models import Alert, Bill, Finding, Lead, Organization, SavingsRecord, Sit
 from .security import hash_password
 from .services.bill_audit import audit_bill
 from .services.jalali import MONTHS_EN, MONTHS_FA, from_date, persianize
-from .services.tariff import BASE_ENERGY_RATE, DEMAND_RATE, BillInput
+from .services.tariff import BASE_ENERGY_RATE, BillInput
 from .services.timeseries import SiteProfile, monthly_totals
 
 # name_fa, name_en, industry, province_fa, province_en, city_fa, city_en,
@@ -131,8 +131,7 @@ def _build_bills(session: Session, site: Site, months: int = 12) -> None:
             status="disputed" if data.billed_total else "analyzed",
         )
         session.add(bill)
-        session.commit()
-        session.refresh(bill)
+        session.flush()  # assigns bill.id; the whole seed commits once at the end
 
         # Only the most recent three invoices keep open findings; older ones are
         # marked resolved so the savings history has something to point at.
@@ -145,7 +144,6 @@ def _build_bills(session: Session, site: Site, months: int = 12) -> None:
                     **f.as_dict(),
                 )
             )
-        session.commit()
 
 
 def _build_alerts(session: Session, site: Site) -> None:
@@ -225,7 +223,6 @@ def _build_alerts(session: Session, site: Site) -> None:
                 created_at=now - timedelta(hours=hours_ago, minutes=(site.id or 1) * 7 % 60),
             )
         )
-    session.commit()
 
 
 def _build_savings(session: Session, site: Site) -> None:
@@ -257,13 +254,17 @@ def _build_savings(session: Session, site: Site) -> None:
                 verified=idx < len(totals) - 1,
             )
         )
-    session.commit()
 
 
 def seed(session: Session, force: bool = False) -> dict:
-    """Populate the database. Idempotent unless force is set."""
-    existing = session.exec(select(Site)).first()
-    if existing and not force:
+    """Populate the database with the demo portfolio, in one transaction.
+
+    Skips a database that already has sites or users, so it never mixes demo
+    accounts into a real deployment. One commit at the end means a crash leaves
+    nothing half-written for the next start-up to trip over.
+    """
+    populated = session.exec(select(Site)).first() or session.exec(select(User)).first()
+    if populated and not force:
         return {"seeded": False, "reason": "already populated"}
 
     org = Organization(
@@ -273,25 +274,24 @@ def seed(session: Session, force: bool = False) -> dict:
         plan="enterprise",
     )
     session.add(org)
-    session.commit()
-    session.refresh(org)
+    session.flush()
 
     users = [
         ("demo@eex.ir", "مدیر نمونه", "owner"),
         ("manager@eex.ir", "سارا رحیمی", "manager"),
         ("analyst@eex.ir", "امیر کاظمی", "analyst"),
     ]
+    demo_hash = hash_password("demo1234")  # one bcrypt run, shared by the demo users
     for email, name, role in users:
         session.add(
             User(
                 email=email,
-                hashed_password=hash_password("demo1234"),
+                hashed_password=demo_hash,
                 full_name=name,
                 role=role,
                 organization_id=org.id,
             )
         )
-    session.commit()
 
     for row in SITES:
         (name_fa, name_en, industry, prov_fa, prov_en, city_fa, city_en, contracted,
@@ -320,8 +320,7 @@ def seed(session: Session, force: bool = False) -> dict:
             commissioned_at=datetime.now(UTC) - timedelta(days=380),
         )
         session.add(site)
-        session.commit()
-        session.refresh(site)
+        session.flush()
 
         _build_bills(session, site)
         _build_alerts(session, site)

@@ -1,18 +1,57 @@
-"""Authentication: login, registration and the current user."""
-from fastapi import APIRouter, HTTPException, status
-from fastapi.security import OAuth2PasswordRequestForm
-from sqlmodel import select
-from typing import Annotated
-from fastapi import Depends
+"""Authentication: login and the current user.
 
-from ..models import Organization, User
+There is no public sign-up. It used to attach every new account to the first
+organization in the database, which handed its data to anyone. Accounts are
+provisioned for a customer's organization; add an owner-only invitation endpoint
+when self-service onboarding is needed.
+"""
+import logging
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.security import OAuth2PasswordRequestForm
+
+from ..models import Organization
+from ..ratelimit import client_ip, login_by_email, login_by_ip
 from ..schemas import LoginRequest, Token, UserOut
-from ..security import CurrentUser, DbSession, authenticate, create_access_token, hash_password
+from ..security import CurrentUser, DbSession, authenticate, create_access_token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+log = logging.getLogger("eex.security")
+
+INVALID_CREDENTIALS = "ایمیل یا رمز عبور نادرست است | Email or password is incorrect"
 
 
-def _user_out(session, user: User) -> UserOut:
+def _login(request: Request, session, email: str, password: str) -> Token:
+    email = email.strip().lower()
+    ip = client_ip(request)
+    login_by_ip.hit(ip)
+    login_by_email.hit(email)
+    user = authenticate(session, email, password)
+    if not user:
+        log.warning("login_failed ip=%s", ip)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=INVALID_CREDENTIALS)
+    log.info("login_ok user_id=%s ip=%s", user.id, ip)
+    return Token(access_token=create_access_token(user))
+
+
+@router.post("/login", response_model=Token)
+def login(payload: LoginRequest, request: Request, session: DbSession) -> Token:
+    return _login(request, session, payload.email, payload.password)
+
+
+@router.post("/token", response_model=Token, include_in_schema=False)
+def login_form(
+    form: Annotated[OAuth2PasswordRequestForm, Depends()], request: Request, session: DbSession
+) -> Token:
+    """OAuth2 password flow, so the interactive API docs can authorise."""
+    if len(form.username) > 254 or len(form.password) > 128:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=INVALID_CREDENTIALS)
+    return _login(request, session, form.username, form.password)
+
+
+@router.get("/me", response_model=UserOut)
+def me(user: CurrentUser, session: DbSession) -> UserOut:
     org = session.get(Organization, user.organization_id) if user.organization_id else None
     return UserOut(
         id=user.id,
@@ -24,56 +63,3 @@ def _user_out(session, user: User) -> UserOut:
         organization_name_fa=org.name_fa if org else None,
         organization_name_en=org.name_en if org else None,
     )
-
-
-@router.post("/login", response_model=Token)
-def login(payload: LoginRequest, session: DbSession) -> Token:
-    user = authenticate(session, payload.email.strip().lower(), payload.password)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="ایمیل یا رمز عبور نادرست است | Email or password is incorrect",
-        )
-    return Token(access_token=create_access_token(user.email))
-
-
-@router.post("/token", response_model=Token, include_in_schema=False)
-def login_form(
-    form: Annotated[OAuth2PasswordRequestForm, Depends()], session: DbSession
-) -> Token:
-    """OAuth2 password flow, so the interactive API docs can authorise."""
-    user = authenticate(session, form.username.strip().lower(), form.password)
-    if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect credentials")
-    return Token(access_token=create_access_token(user.email))
-
-
-@router.post("/register", response_model=Token, status_code=status.HTTP_201_CREATED)
-def register(payload: LoginRequest, session: DbSession) -> Token:
-    email = payload.email.strip().lower()
-    if session.exec(select(User).where(User.email == email)).first():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="این ایمیل قبلاً ثبت شده است | This email is already registered",
-        )
-    if len(payload.password) < 8:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="رمز عبور باید دست‌کم ۸ نویسه باشد | Password must be at least 8 characters",
-        )
-    org = session.exec(select(Organization)).first()
-    user = User(
-        email=email,
-        hashed_password=hash_password(payload.password),
-        full_name=email.split("@")[0],
-        role="manager",
-        organization_id=org.id if org else None,
-    )
-    session.add(user)
-    session.commit()
-    return Token(access_token=create_access_token(user.email))
-
-
-@router.get("/me", response_model=UserOut)
-def me(user: CurrentUser, session: DbSession) -> UserOut:
-    return _user_out(session, user)

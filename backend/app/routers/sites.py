@@ -1,12 +1,12 @@
 """Sites, live readings and consumption series."""
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, HTTPException, Query
-from sqlmodel import func, select
+from fastapi import APIRouter, Query
+from sqlmodel import Session, func, select
 
 from ..models import Bill, Finding, SavingsRecord, Site
 from ..schemas import SiteDetail, SiteLive, SiteOut
-from ..security import CurrentUser, DbSession
+from ..security import DbSession, OrgUser
 from ..services.timeseries import (
     SiteProfile,
     aggregate_bands,
@@ -15,6 +15,7 @@ from ..services.timeseries import (
     sample,
     series,
 )
+from ..tenancy import get_site_or_404, jalali_year_start_month
 
 router = APIRouter(prefix="/sites", tags=["sites"])
 
@@ -37,8 +38,8 @@ def profile_for(site: Site) -> SiteProfile:
     )
 
 
-def live_for(site: Site) -> SiteLive:
-    reading = sample(profile_for(site), datetime.now(UTC))
+def live_for(site: Site, now: datetime | None = None) -> SiteLive:
+    reading = sample(profile_for(site), now or datetime.now(UTC))
     return SiteLive(
         site_id=site.id,
         kw=reading["kw"],
@@ -53,46 +54,73 @@ def live_for(site: Site) -> SiteLive:
     )
 
 
-def detail_for(session, site: Site) -> SiteDetail:
-    open_findings = session.exec(
-        select(func.count(Finding.id)).where(Finding.site_id == site.id, Finding.status == "open")
-    ).one()
-    potential = session.exec(
-        select(func.coalesce(func.sum(Finding.annual_saving), 0.0)).where(
-            Finding.site_id == site.id, Finding.status == "open"
+def site_stats(session: Session, site_ids: list[int]) -> dict[int, dict]:
+    """Per-site figures for the site cards, in four grouped queries for any number of sites."""
+    stats = {
+        sid: {"open": 0, "potential": 0.0, "verified": 0.0, "last_bill": None} for sid in site_ids
+    }
+    if not site_ids:
+        return stats
+    for sid, count, potential in session.exec(
+        select(Finding.site_id, func.count(Finding.id), func.coalesce(func.sum(Finding.annual_saving), 0.0))
+        .where(Finding.site_id.in_(site_ids), Finding.status == "open")
+        .group_by(Finding.site_id)
+    ).all():
+        stats[sid]["open"] = int(count or 0)
+        stats[sid]["potential"] = float(potential or 0.0)
+    for sid, verified in session.exec(
+        select(SavingsRecord.site_id, func.coalesce(func.sum(SavingsRecord.saved_amount), 0.0))
+        .where(
+            SavingsRecord.site_id.in_(site_ids),
+            SavingsRecord.verified == True,  # noqa: E712
+            SavingsRecord.month >= jalali_year_start_month(),
         )
-    ).one()
-    verified = session.exec(
-        select(func.coalesce(func.sum(SavingsRecord.saved_amount), 0.0)).where(
-            SavingsRecord.site_id == site.id, SavingsRecord.verified == True  # noqa: E712
+        .group_by(SavingsRecord.site_id)
+    ).all():
+        stats[sid]["verified"] = float(verified or 0.0)
+    latest = (
+        select(Bill.site_id, func.max(Bill.issued_at).label("issued_at"))
+        .where(Bill.site_id.in_(site_ids))
+        .group_by(Bill.site_id)
+        .subquery()
+    )
+    for bill in session.exec(
+        select(Bill).join(
+            latest, (Bill.site_id == latest.c.site_id) & (Bill.issued_at == latest.c.issued_at)
         )
-    ).one()
-    last_bill = session.exec(
-        select(Bill).where(Bill.site_id == site.id).order_by(Bill.issued_at.desc())
-    ).first()
+    ).all():
+        stats[bill.site_id]["last_bill"] = bill
+    return stats
 
+
+def detail_for(site: Site, stats: dict, live: SiteLive) -> SiteDetail:
+    last_bill = stats["last_bill"]
     return SiteDetail(
         **SiteOut.model_validate(site, from_attributes=True).model_dump(),
-        live=live_for(site),
-        open_findings=int(open_findings or 0),
-        annual_saving_potential=float(potential or 0.0),
-        verified_savings_ytd=float(verified or 0.0),
+        live=live,
+        open_findings=stats["open"],
+        annual_saving_potential=stats["potential"],
+        verified_savings_ytd=stats["verified"],
         last_bill_total=last_bill.billed_total if last_bill else None,
         last_bill_period_fa=last_bill.period_label_fa if last_bill else None,
     )
 
 
+def details_for(session: Session, sites: list[Site], now: datetime | None = None) -> list[SiteDetail]:
+    now = now or datetime.now(UTC)
+    stats = site_stats(session, [s.id for s in sites])
+    return [detail_for(s, stats[s.id], live_for(s, now)) for s in sites]
+
+
 @router.get("", response_model=list[SiteDetail])
 def list_sites(
-    user: CurrentUser,
+    user: OrgUser,
     session: DbSession,
-    status: str | None = None,
-    industry: str | None = None,
-    q: str | None = None,
+    status: str | None = Query(default=None, max_length=32),
+    industry: str | None = Query(default=None, max_length=32),
+    q: str | None = Query(default=None, max_length=100),
 ) -> list[SiteDetail]:
-    stmt = select(Site)
-    if user.organization_id:
-        stmt = stmt.where(Site.organization_id == user.organization_id)
+    stmt = select(Site).where(Site.organization_id == user.organization_id)
     if status:
         stmt = stmt.where(Site.status == status)
     if industry:
@@ -108,36 +136,29 @@ def list_sites(
             or needle in s.province_fa.lower()
             or needle in s.province_en.lower()
         ]
-    return [detail_for(session, s) for s in sites]
+    return details_for(session, sites)
 
 
 @router.get("/{site_id}", response_model=SiteDetail)
-def get_site(site_id: int, user: CurrentUser, session: DbSession) -> SiteDetail:
-    site = session.get(Site, site_id)
-    if not site:
-        raise HTTPException(status_code=404, detail="Site not found")
-    return detail_for(session, site)
+def get_site(site_id: int, user: OrgUser, session: DbSession) -> SiteDetail:
+    site = get_site_or_404(session, user, site_id)
+    return details_for(session, [site])[0]
 
 
 @router.get("/{site_id}/live", response_model=SiteLive)
-def get_live(site_id: int, user: CurrentUser, session: DbSession) -> SiteLive:
-    site = session.get(Site, site_id)
-    if not site:
-        raise HTTPException(status_code=404, detail="Site not found")
-    return live_for(site)
+def get_live(site_id: int, user: OrgUser, session: DbSession) -> SiteLive:
+    return live_for(get_site_or_404(session, user, site_id))
 
 
 @router.get("/{site_id}/consumption")
 def consumption(
     site_id: int,
-    user: CurrentUser,
+    user: OrgUser,
     session: DbSession,
     range: str = Query(default="24h", pattern="^(24h|7d|30d|12m)$"),
 ) -> dict:
     """Load profile and band split over the requested window."""
-    site = session.get(Site, site_id)
-    if not site:
-        raise HTTPException(status_code=404, detail="Site not found")
+    site = get_site_or_404(session, user, site_id)
 
     window, step, max_points = RANGES[range]
     now = datetime.now(UTC)
@@ -188,11 +209,9 @@ def consumption(
 
 
 @router.get("/{site_id}/meters")
-def meters(site_id: int, user: CurrentUser, session: DbSession) -> dict:
+def meters(site_id: int, user: OrgUser, session: DbSession) -> dict:
     """Per-feeder breakdown, derived from the site profile."""
-    site = session.get(Site, site_id)
-    if not site:
-        raise HTTPException(status_code=404, detail="Site not found")
+    site = get_site_or_404(session, user, site_id)
 
     live = live_for(site)
     # A realistic industrial distribution: process load dominates, then utilities.

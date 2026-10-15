@@ -3,7 +3,7 @@
 import { PiggyBank } from "lucide-react";
 import useSWR from "swr";
 
-import { EmptyState, KpiCard, PageHeader } from "@/components/app/pieces";
+import { EmptyState, ErrorState, KpiCard, PageHeader } from "@/components/app/pieces";
 import { BarSeries } from "@/components/charts/bar-series";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader } from "@/components/ui/card";
@@ -15,10 +15,18 @@ import { useLocale, useLocalized } from "@/lib/locale-context";
 export default function SavingsPage() {
   const { dict, locale } = useLocale();
   const pick = useLocalized();
-  const { data: records, isLoading } = useSWR<SavingsRecord[]>("/api/v1/savings");
+  const { data: records, error, isLoading, mutate } = useSWR<SavingsRecord[]>("/api/v1/savings");
   const { data: sites } = useSWR<Site[]>("/api/v1/sites");
   const siteById = new Map((sites ?? []).map((site) => [site.id, site]));
 
+  if (error && !records) {
+    return (
+      <>
+        <PageHeader title={dict.app.savings.title} subtitle={dict.app.savings.subtitle} />
+        <ErrorState error={error} onRetry={() => mutate()} />
+      </>
+    );
+  }
   if (isLoading) return <Skeleton className="h-96 w-full" />;
   if (!records || records.length === 0) {
     return (
@@ -99,7 +107,7 @@ export default function SavingsPage() {
                 <th className="p-4 text-start font-medium">{dict.app.savings.actual}</th>
                 <th className="p-4 text-start font-medium">{dict.app.savings.saved}</th>
                 <th className="p-4 text-start font-medium">{dict.app.savings.savedAmount}</th>
-                <th className="p-4 text-start font-medium">{dict.common.confirm}</th>
+                <th className="p-4 text-start font-medium">{dict.app.savings.status}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--line)]">
@@ -116,7 +124,8 @@ export default function SavingsPage() {
                 return (
                   <tr key={record.id} className="transition-colors hover:bg-surface-2">
                     <td className="p-4 whitespace-nowrap font-medium text-ink">
-                      {record.period_label_fa || formatMonthKey(record.month, locale)}
+                      {/* The API only labels periods in Persian. */}
+                      {(locale === "fa" && record.period_label_fa) || formatMonthKey(record.month, locale)}
                     </td>
                     <td className="p-4 text-ink-2">{site ? pick(site, "name") : "—"}</td>
                     <td className="p-4 tabular whitespace-nowrap text-ink-2">

@@ -1,24 +1,37 @@
 """Operational alerts."""
-from fastapi import APIRouter, HTTPException, Query
-from sqlmodel import select
+from fastapi import APIRouter, Query
+from sqlmodel import func, select
 
 from ..models import Alert, Site
-from ..schemas import AlertOut
-from ..security import CurrentUser, DbSession
+from ..schemas import AlertCount, AlertOut
+from ..security import DbSession, Editor, OrgUser
+from ..tenancy import get_owned_or_404, org_site_ids
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
 
+def _alert_out(alert: Alert, site: Site | None) -> AlertOut:
+    return AlertOut(
+        **alert.model_dump(),
+        site_name_fa=site.name_fa if site else "",
+        site_name_en=site.name_en if site else "",
+    )
+
+
 @router.get("", response_model=list[AlertOut])
 def list_alerts(
-    user: CurrentUser,
+    user: OrgUser,
     session: DbSession,
     site_id: int | None = None,
-    severity: str | None = None,
+    severity: str | None = Query(default=None, max_length=16),
     acknowledged: bool | None = None,
-    limit: int = Query(default=100, le=400),
+    limit: int = Query(default=100, ge=1, le=400),
 ) -> list[AlertOut]:
-    stmt = select(Alert)
+    stmt = (
+        select(Alert, Site)
+        .join(Site, Site.id == Alert.site_id)
+        .where(Site.organization_id == user.organization_id)
+    )
     if site_id:
         stmt = stmt.where(Alert.site_id == site_id)
     if severity:
@@ -26,29 +39,26 @@ def list_alerts(
     if acknowledged is not None:
         stmt = stmt.where(Alert.acknowledged == acknowledged)
     rows = session.exec(stmt.order_by(Alert.created_at.desc()).limit(limit)).all()
-    sites = {s.id: s for s in session.exec(select(Site)).all()}
-    return [
-        AlertOut(
-            **a.model_dump(),
-            site_name_fa=sites[a.site_id].name_fa if a.site_id in sites else "",
-            site_name_en=sites[a.site_id].name_en if a.site_id in sites else "",
+    return [_alert_out(alert, site) for alert, site in rows]
+
+
+@router.get("/count", response_model=AlertCount)
+def count_alerts(user: OrgUser, session: DbSession) -> AlertCount:
+    """Unacknowledged alerts, for the navigation badge."""
+    count = session.exec(
+        select(func.count(Alert.id)).where(
+            Alert.site_id.in_(org_site_ids(user)),
+            Alert.acknowledged == False,  # noqa: E712
         )
-        for a in rows
-    ]
+    ).one()
+    return AlertCount(unacknowledged=int(count or 0))
 
 
 @router.post("/{alert_id}/acknowledge", response_model=AlertOut)
-def acknowledge(alert_id: int, user: CurrentUser, session: DbSession) -> AlertOut:
-    alert = session.get(Alert, alert_id)
-    if not alert:
-        raise HTTPException(status_code=404, detail="Alert not found")
+def acknowledge(alert_id: int, user: Editor, session: DbSession) -> AlertOut:
+    alert = get_owned_or_404(session, user, Alert, alert_id, "Alert not found")
     alert.acknowledged = True
     session.add(alert)
     session.commit()
     session.refresh(alert)
-    site = session.get(Site, alert.site_id)
-    return AlertOut(
-        **alert.model_dump(),
-        site_name_fa=site.name_fa if site else "",
-        site_name_en=site.name_en if site else "",
-    )
+    return _alert_out(alert, session.get(Site, alert.site_id))

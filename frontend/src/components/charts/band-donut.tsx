@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { useLocale } from "@/lib/locale-context";
 import { formatPercent } from "@/lib/format";
@@ -18,7 +18,8 @@ interface Slice {
 /**
  * Consumption split by tariff band. Three categories, so the legend is always
  * present and every slice is also directly labelled with its share - identity
- * never rests on colour alone.
+ * never rests on colour alone. That legend is the text alternative too, so the
+ * ring itself is hidden from assistive technology.
  */
 export function BandDonut({
   data,
@@ -40,43 +41,45 @@ export function BandDonut({
   const { dict, locale } = useLocale();
   const [active, setActive] = useState<string | null>(null);
 
-  const slices: Slice[] = (["peak", "mid_peak", "off_peak"] as const)
-    .map((key) => ({
-      key,
-      label: dict.bands[key],
-      value: data[key] ?? 0,
-      color: bandColor[key],
-    }))
-    .filter((slice) => slice.value > 0);
+  const radius = (size - thickness) / 2;
 
-  const total = slices.reduce((sum, slice) => sum + slice.value, 0);
-  if (total <= 0) {
+  // Recomputed when the data changes, not when a slice is hovered.
+  const arcs = useMemo(() => {
+    const slices: Slice[] = (["peak", "mid_peak", "off_peak"] as const)
+      .map((key) => ({
+        key,
+        label: dict.bands[key],
+        value: data[key] ?? 0,
+        color: bandColor[key],
+      }))
+      .filter((slice) => slice.value > 0);
+    const total = slices.reduce((sum, slice) => sum + slice.value, 0);
+    const circumference = 2 * Math.PI * radius;
+    // A small gap between segments so neighbouring fills stay separable.
+    const gap = 3;
+    let offset = 0;
+    return slices.map((slice) => {
+      const fraction = slice.value / total;
+      const length = Math.max(circumference * fraction - gap, 1);
+      const arc = {
+        ...slice,
+        fraction,
+        dasharray: `${length} ${circumference - length}`,
+        dashoffset: -offset,
+      };
+      offset += circumference * fraction;
+      return arc;
+    });
+  }, [data, dict, radius]);
+
+  if (arcs.length === 0) {
     return <div className={cn("text-sm text-ink-3", className)}>{dict.chart.noData}</div>;
   }
-
-  const radius = (size - thickness) / 2;
-  const circumference = 2 * Math.PI * radius;
-  // A 2px gap between segments so neighbouring fills stay separable.
-  const gap = 3;
-
-  let offset = 0;
-  const arcs = slices.map((slice) => {
-    const fraction = slice.value / total;
-    const length = Math.max(circumference * fraction - gap, 1);
-    const arc = {
-      ...slice,
-      fraction,
-      dasharray: `${length} ${circumference - length}`,
-      dashoffset: -offset,
-    };
-    offset += circumference * fraction;
-    return arc;
-  });
 
   return (
     <div className={cn("flex flex-wrap items-center gap-6", className)}>
       <div className="relative shrink-0" style={{ width: size, height: size }}>
-        <svg width={size} height={size} className="-rotate-90">
+        <svg width={size} height={size} className="-rotate-90" aria-hidden>
           <circle
             cx={size / 2}
             cy={size / 2}

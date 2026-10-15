@@ -14,8 +14,6 @@ from dataclasses import asdict, dataclass, field
 from .jalali import persianize
 from .tariff import (
     BAND_COEFFICIENTS,
-    DEMAND_RATE,
-    EXCESS_DEMAND_FACTOR,
     INDUSTRY_BENCHMARKS,
     POWER_FACTOR_THRESHOLD,
     BillBreakdown,
