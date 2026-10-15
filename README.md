@@ -63,6 +63,9 @@ With `SEED_ON_STARTUP=true` the database is seeded on first boot with a demo por
 20 industrial sites across eight provinces, a year of invoices each, and the findings the
 audit engine produced from them.
 
+Behind a TLS reverse proxy, set `FORWARDED_ALLOW_IPS` to the proxy's address and stop
+publishing port 8000; otherwise every client shares one rate-limit bucket.
+
 **Demo login** (demo mode only) — `demo@eex.ir` / `demo1234`. The demo users have a
 published password, so never enable demo mode on a deployment that holds real data.
 

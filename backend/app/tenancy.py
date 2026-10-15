@@ -4,6 +4,7 @@ All routers go through these helpers, so the organization check lives in one pla
 An object owned by another organization answers 404, not 403, so ids of other
 tenants' data cannot be confirmed by probing.
 """
+import logging
 from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
@@ -11,6 +12,8 @@ from sqlmodel import Session, select
 
 from .models import Site, User
 from .services.jalali import from_date, jalali_to_gregorian
+
+log = logging.getLogger("eex.security")
 
 
 def org_site_ids(user: User):
@@ -20,6 +23,9 @@ def org_site_ids(user: User):
 
 def get_site_or_404(session: Session, user: User, site_id: int) -> Site:
     site = session.get(Site, site_id)
+    if site is not None and site.organization_id != user.organization_id:
+        # Someone asked for another tenant's site by id: worth alerting on in bursts.
+        log.warning("tenant_mismatch user_id=%s site_id=%s", user.id, site_id)
     if site is None or site.organization_id != user.organization_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Site not found")
     return site

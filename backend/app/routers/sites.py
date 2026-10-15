@@ -5,7 +5,7 @@ from fastapi import APIRouter, Query
 from sqlmodel import Session, func, select
 
 from ..models import Bill, Finding, SavingsRecord, Site
-from ..schemas import SiteDetail, SiteLive, SiteOut
+from ..schemas import Id, SiteDetail, SiteLive, SiteOut
 from ..security import DbSession, OrgUser
 from ..services.timeseries import (
     SiteProfile,
@@ -140,19 +140,19 @@ def list_sites(
 
 
 @router.get("/{site_id}", response_model=SiteDetail)
-def get_site(site_id: int, user: OrgUser, session: DbSession) -> SiteDetail:
+def get_site(site_id: Id, user: OrgUser, session: DbSession) -> SiteDetail:
     site = get_site_or_404(session, user, site_id)
     return details_for(session, [site])[0]
 
 
 @router.get("/{site_id}/live", response_model=SiteLive)
-def get_live(site_id: int, user: OrgUser, session: DbSession) -> SiteLive:
+def get_live(site_id: Id, user: OrgUser, session: DbSession) -> SiteLive:
     return live_for(get_site_or_404(session, user, site_id))
 
 
 @router.get("/{site_id}/consumption")
 def consumption(
-    site_id: int,
+    site_id: Id,
     user: OrgUser,
     session: DbSession,
     range: str = Query(default="24h", pattern="^(24h|7d|30d|12m)$"),
@@ -209,7 +209,7 @@ def consumption(
 
 
 @router.get("/{site_id}/meters")
-def meters(site_id: int, user: OrgUser, session: DbSession) -> dict:
+def meters(site_id: Id, user: OrgUser, session: DbSession) -> dict:
     """Per-feeder breakdown, derived from the site profile."""
     site = get_site_or_404(session, user, site_id)
 

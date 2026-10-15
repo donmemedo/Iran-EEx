@@ -199,3 +199,93 @@ def test_validation_errors_do_not_echo_input(client):
     r = client.post(f"{API}/auth/login", json={"email": "demo@eex.ir", "password": secret})
     assert r.status_code == 422
     assert secret not in r.text
+
+
+# --- controls added after the blue-team review --------------------------------
+def test_streamed_body_without_length_is_capped(client):
+    def chunks():
+        for _ in range(80):
+            yield b"x" * 1024  # 80 KB, sent chunked with no Content-Length
+
+    r = client.post(f"{API}/leads", content=chunks(), headers={"Content-Type": "application/json"})
+    # Reading stops past 64 KB. FastAPI reports Starlette's limit error raised mid-body
+    # as a body parse error (400); with Content-Length the answer is 413.
+    assert r.status_code in (400, 413)
+
+
+def test_one_source_cannot_lock_an_account_out_for_everyone():
+    from app.ratelimit import login_by_email, login_by_ip_email
+
+    for _ in range(20):
+        login_by_ip_email.hit("10.0.0.1|demo@eex.ir")
+        login_by_email.hit("demo@eex.ir")
+    with pytest.raises(Exception) as blocked:
+        login_by_ip_email.hit("10.0.0.1|demo@eex.ir")
+    assert blocked.value.status_code == 429
+    login_by_ip_email.hit("10.0.0.2|demo@eex.ir")  # the real user, elsewhere: still allowed
+    login_by_email.hit("demo@eex.ir")  # the per-account ceiling (100) is not reached
+
+
+def test_limiter_overflow_evicts_oldest_not_everything(monkeypatch):
+    import app.ratelimit as rl
+
+    monkeypatch.setattr(rl, "_MAX_KEYS", 3)
+    limiter = rl.RateLimiter("t", limit=2, window_seconds=60)
+    for key in ("a", "b", "victim"):
+        limiter.hit(key)
+    limiter.hit("victim")
+    limiter.hit("d")  # table full: evicts "a", the oldest window
+    assert set(limiter._hits) == {"b", "victim", "d"}
+    with pytest.raises(Exception):
+        limiter.hit("victim")  # its count survived the overflow
+
+
+def test_deactivated_user_is_locked_out(client, db, demo_headers):
+    from sqlmodel import select
+
+    from app.models import User
+
+    user = db.exec(select(User).where(User.email == "demo@eex.ir")).one()
+    user.is_active = False
+    db.add(user)
+    db.commit()
+    assert client.get(f"{API}/auth/me", headers=demo_headers).status_code == 401
+    r = client.post(f"{API}/auth/login", json={"email": "demo@eex.ir", "password": PASSWORD})
+    assert r.status_code == 401
+
+
+@pytest.mark.parametrize("missing", ["exp", "iat", "sub"])
+def test_tokens_missing_a_required_claim_are_rejected(client, missing):
+    now = datetime.now(UTC)
+    claims = {"sub": "1", "iat": now, "exp": now + timedelta(minutes=5), "typ": "access"}
+    del claims[missing]
+    token = jwt.encode(claims, settings.jwt_secret, algorithm="HS256")
+    assert client.get(f"{API}/auth/me", headers={"Authorization": f"Bearer {token}"}).status_code == 401
+
+
+def test_password_is_compared_exactly(client):
+    r = client.post(f"{API}/auth/login", json={"email": "demo@eex.ir", "password": f" {PASSWORD} "})
+    assert r.status_code == 401
+
+
+@pytest.mark.parametrize("path", ["/sites/99999999999999999999", "/bills?site_id=99999999999999999999"])
+def test_oversized_ids_are_rejected_not_crashing(client, demo_headers, path):
+    assert client.get(API + path, headers=demo_headers).status_code == 422
+
+
+def test_docs_and_form_login_are_off_in_production():
+    import os
+    import subprocess
+    import sys
+
+    env = dict(os.environ, ENVIRONMENT="production", JWT_SECRET="p" * 40, DATABASE_URL="sqlite://")
+    probe = (
+        "from app.main import app;"
+        "paths = set(app.openapi_schema or {}) | {getattr(r, 'path', '') for r in app.router.routes};"
+        "print(app.docs_url, app.openapi_url, any(p.endswith('/auth/token') for p in paths))"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", probe], env=env, capture_output=True, text=True, timeout=300,
+        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    )
+    assert out.stdout.split() == ["None", "None", "False"], out.stderr[-2000:]

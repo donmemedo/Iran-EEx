@@ -12,6 +12,7 @@ from ..schemas import (
     FindingOut,
     PortfolioPoint,
     SavingsOut,
+    SiteFilter,
 )
 from ..security import DbSession, OrgUser
 from ..services.timeseries import aggregate_bands, downsample, series
@@ -146,7 +147,7 @@ def dashboard(user: OrgUser, session: DbSession) -> DashboardOut:
 
 
 @router.get("/savings", response_model=list[SavingsOut])
-def savings(user: OrgUser, session: DbSession, site_id: int | None = None) -> list[SavingsOut]:
+def savings(user: OrgUser, session: DbSession, site_id: SiteFilter = None) -> list[SavingsOut]:
     stmt = select(SavingsRecord).where(SavingsRecord.site_id.in_(org_site_ids(user)))
     if site_id:
         stmt = stmt.where(SavingsRecord.site_id == site_id)

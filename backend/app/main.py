@@ -7,6 +7,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.body_limit import RequestBodyLimitMiddleware
 from sqlmodel import Session
 
 from .config import settings
@@ -15,11 +16,14 @@ from .routers import alerts, auth, bills, dashboard, public, sites
 from .seed import seed
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+log = logging.getLogger("eex.security")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    if settings.seed_on_startup and not settings.is_development:
+        log.warning("demo_seed_enabled environment=%s: demo users have a public password", settings.environment)
     if settings.seed_on_startup:
         with Session(engine) as session:
             seed(session)
@@ -51,10 +55,6 @@ SECURITY_HEADERS = {
 
 @app.middleware("http")
 async def harden(request, call_next):
-    # Reject oversized bodies before they are read. Every endpoint takes small JSON.
-    length = request.headers.get("content-length")
-    if length and (not length.isdigit() or int(length) > settings.max_body_bytes):
-        return JSONResponse({"detail": "Request body too large"}, status_code=413)
     response = await call_next(request)
     for key, value in SECURITY_HEADERS.items():
         response.headers.setdefault(key, value)
@@ -76,6 +76,11 @@ async def validation_error(request, exc: RequestValidationError) -> JSONResponse
     errors = [{k: v for k, v in e.items() if k in ("type", "loc", "msg")} for e in exc.errors()]
     return JSONResponse({"detail": jsonable_encoder(errors)}, status_code=422)
 
+
+# Counts streamed bytes too, so a chunked body without Content-Length cannot get
+# around the limit. Every endpoint takes small JSON. Added before CORS, so CORS stays
+# the outer layer and the 413 is readable cross-origin.
+app.add_middleware(RequestBodyLimitMiddleware, max_body_size=settings.max_body_bytes)
 
 app.add_middleware(
     CORSMiddleware,

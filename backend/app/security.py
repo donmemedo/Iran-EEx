@@ -1,18 +1,20 @@
 """Password hashing, JWT access tokens and the access-control dependencies."""
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 import bcrypt
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlmodel import Session, select
 
 from .config import settings
 from .database import get_session
 from .models import User
-from .ratelimit import api_by_user
+from .ratelimit import api_by_user, client_ip
 
+log = logging.getLogger("eex.security")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.api_prefix}/auth/token", auto_error=False)
 
 # bcrypt only reads the first 72 bytes; longer input is rejected rather than truncated.
@@ -65,6 +67,7 @@ def authenticate(session: Session, email: str, password: str) -> User | None:
 
 
 def get_current_user(
+    request: Request,
     token: Annotated[str | None, Depends(oauth2_scheme)],
     session: Annotated[Session, Depends(get_session)],
 ) -> User:
@@ -83,12 +86,17 @@ def get_current_user(
             options={"require": ["exp", "iat", "sub"]},
         )
         user_id = int(payload["sub"])
+    except jwt.ExpiredSignatureError:
+        raise credentials_error from None  # routine: sessions end, not worth a log line
     except (jwt.PyJWTError, KeyError, TypeError, ValueError):
+        log.warning("token_rejected reason=invalid ip=%s", client_ip(request))
         raise credentials_error from None
     if payload.get("typ") != "access":
+        log.warning("token_rejected reason=type ip=%s", client_ip(request))
         raise credentials_error
     user = session.get(User, user_id)
     if not user or not user.is_active:
+        log.warning("token_rejected reason=user user_id=%s ip=%s", user_id, client_ip(request))
         raise credentials_error
     return user
 
@@ -105,6 +113,7 @@ def get_org_user(user: Annotated[User, Depends(get_current_user)]) -> User:
 def get_editor(user: Annotated[User, Depends(get_org_user)]) -> User:
     """A user allowed to change data. Analysts are read-only."""
     if user.role not in ROLES_THAT_CAN_EDIT:
+        log.warning("forbidden_role user_id=%s role=%s", user.id, user.role)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Your role cannot make changes")
     return user
 

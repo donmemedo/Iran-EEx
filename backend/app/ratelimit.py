@@ -31,26 +31,22 @@ class RateLimiter:
         with self._lock:
             start, count = self._hits.get(key, (now, 0))
             if now - start >= self.window:
+                # Re-insert so the dict stays ordered by window start, oldest first.
+                self._hits.pop(key, None)
                 start, count = now, 0
             count += 1
-            if len(self._hits) >= _MAX_KEYS and key not in self._hits:
-                self._prune(now)
+            while len(self._hits) >= _MAX_KEYS and key not in self._hits:
+                # Evict the oldest window instead of wiping live counters.
+                self._hits.pop(next(iter(self._hits)))
             self._hits[key] = (start, count)
         if count > self.limit:
             retry_after = max(1, math.ceil(self.window - (now - start)))
-            log.warning("rate_limited limiter=%s key=%s", self.name, _redact(key))
+            log.warning("rate_limited limiter=%s key=%s", self.name, redact(key))
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="درخواست‌ها بیش از حد مجاز است. کمی بعد دوباره امتحان کنید | Too many requests, try again later",
                 headers={"Retry-After": str(retry_after)},
             )
-
-    def _prune(self, now: float) -> None:
-        expired = [k for k, (start, _) in self._hits.items() if now - start >= self.window]
-        for k in expired:
-            del self._hits[k]
-        if len(self._hits) >= _MAX_KEYS:  # still full: everyone is live, start over
-            self._hits.clear()
 
     def reset(self) -> None:
         with self._lock:
@@ -68,7 +64,7 @@ def client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def _redact(key: str) -> str:
+def redact(key: str) -> str:
     """Log enough to correlate an attack without writing full emails to the log."""
     if "@" in key:
         local, _, domain = key.partition("@")
@@ -77,10 +73,14 @@ def _redact(key: str) -> str:
 
 
 login_by_ip = RateLimiter("login_ip", limit=10, window_seconds=60)
-login_by_email = RateLimiter("login_email", limit=20, window_seconds=15 * 60)
+# Per source and account: stops one client guessing one password without letting
+# that client lock the real user out.
+login_by_ip_email = RateLimiter("login_ip_email", limit=20, window_seconds=15 * 60)
+# Per account across all sources: a ceiling for distributed guessing.
+login_by_email = RateLimiter("login_email", limit=100, window_seconds=15 * 60)
 calculator_by_ip = RateLimiter("calculator_ip", limit=60, window_seconds=60)
 analyze_by_ip = RateLimiter("analyze_ip", limit=30, window_seconds=60)
 leads_by_ip = RateLimiter("leads_ip", limit=5, window_seconds=10 * 60)
 api_by_user = RateLimiter("api_user", limit=600, window_seconds=60)
 
-ALL_LIMITERS = (login_by_ip, login_by_email, calculator_by_ip, analyze_by_ip, leads_by_ip, api_by_user)
+ALL_LIMITERS = (login_by_ip, login_by_ip_email, login_by_email, calculator_by_ip, analyze_by_ip, leads_by_ip, api_by_user)

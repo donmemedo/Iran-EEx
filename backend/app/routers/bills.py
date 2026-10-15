@@ -1,13 +1,16 @@
 """Invoices and their audit findings."""
+import logging
+
 from fastapi import APIRouter, Query
 from sqlmodel import Session, func, select
 
 from ..models import Bill, Finding, Site
-from ..schemas import BillDetail, BillOut, FindingOut, FindingStatus
+from ..schemas import BillDetail, BillOut, FindingOut, FindingStatus, Id, SiteFilter
 from ..security import DbSession, Editor, OrgUser
 from ..tenancy import get_owned_or_404, org_site_ids
 
 router = APIRouter(tags=["bills"])
+audit = logging.getLogger("eex.audit")
 
 
 def _bills_out(session: Session, bills: list[Bill]) -> list[BillOut]:
@@ -39,7 +42,7 @@ def _bills_out(session: Session, bills: list[Bill]) -> list[BillOut]:
 def list_bills(
     user: OrgUser,
     session: DbSession,
-    site_id: int | None = None,
+    site_id: SiteFilter = None,
     status: str | None = Query(default=None, max_length=32),
     limit: int = Query(default=60, ge=1, le=300),
 ) -> list[BillOut]:
@@ -53,7 +56,7 @@ def list_bills(
 
 
 @router.get("/bills/{bill_id}", response_model=BillDetail)
-def get_bill(bill_id: int, user: OrgUser, session: DbSession) -> BillDetail:
+def get_bill(bill_id: Id, user: OrgUser, session: DbSession) -> BillDetail:
     bill = get_owned_or_404(session, user, Bill, bill_id, "Bill not found")
     site = session.get(Site, bill.site_id)
     findings = session.exec(
@@ -73,7 +76,7 @@ def get_bill(bill_id: int, user: OrgUser, session: DbSession) -> BillDetail:
 def list_findings(
     user: OrgUser,
     session: DbSession,
-    site_id: int | None = None,
+    site_id: SiteFilter = None,
     status: FindingStatus | None = "open",
     severity: str | None = Query(default=None, max_length=16),
     limit: int = Query(default=100, ge=1, le=500),
@@ -91,12 +94,13 @@ def list_findings(
 
 @router.patch("/findings/{finding_id}", response_model=FindingOut)
 def update_finding(
-    finding_id: int,
+    finding_id: Id,
     status: FindingStatus,
     user: Editor,
     session: DbSession,
 ) -> FindingOut:
     finding = get_owned_or_404(session, user, Finding, finding_id, "Finding not found")
+    audit.info("finding_status user_id=%s finding_id=%s %s->%s", user.id, finding.id, finding.status, status)
     finding.status = status
     session.add(finding)
     session.commit()

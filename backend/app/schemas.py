@@ -2,12 +2,18 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
+from fastapi import Path, Query
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 Industry = Literal["steel", "cement", "ceramic", "plastic", "food", "pharma", "textile", "other"]
 FindingStatus = Literal["open", "in_progress", "done", "dismissed"]
+
+# Ids beyond int64 make the SQLite driver raise (a 500); bound them to a 422.
+_INT64 = 2**63 - 1
+Id = Annotated[int, Path(ge=1, le=_INT64)]
+SiteFilter = Annotated[int | None, Query(ge=1, le=_INT64)]
 
 # Upper bounds that no real invoice reaches. They keep arithmetic finite and stop
 # absurd values from turning into huge numbers in responses.
@@ -29,6 +35,10 @@ class Token(BaseModel):
 
 
 class LoginRequest(RequestModel):
+    # Passwords are compared exactly: stripping would accept variants and lock out
+    # passwords that really start or end with a space.
+    model_config = ConfigDict(str_strip_whitespace=False)
+
     # Plain str, not EmailStr: a malformed email must fail like a wrong password,
     # not with a 422 that tells the caller something about the input.
     email: str = Field(min_length=1, max_length=254)

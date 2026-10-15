@@ -1,13 +1,16 @@
 """Operational alerts."""
+import logging
+
 from fastapi import APIRouter, Query
 from sqlmodel import func, select
 
 from ..models import Alert, Site
-from ..schemas import AlertCount, AlertOut
+from ..schemas import AlertCount, AlertOut, Id, SiteFilter
 from ..security import DbSession, Editor, OrgUser
 from ..tenancy import get_owned_or_404, org_site_ids
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
+audit = logging.getLogger("eex.audit")
 
 
 def _alert_out(alert: Alert, site: Site | None) -> AlertOut:
@@ -22,7 +25,7 @@ def _alert_out(alert: Alert, site: Site | None) -> AlertOut:
 def list_alerts(
     user: OrgUser,
     session: DbSession,
-    site_id: int | None = None,
+    site_id: SiteFilter = None,
     severity: str | None = Query(default=None, max_length=16),
     acknowledged: bool | None = None,
     limit: int = Query(default=100, ge=1, le=400),
@@ -55,8 +58,9 @@ def count_alerts(user: OrgUser, session: DbSession) -> AlertCount:
 
 
 @router.post("/{alert_id}/acknowledge", response_model=AlertOut)
-def acknowledge(alert_id: int, user: Editor, session: DbSession) -> AlertOut:
+def acknowledge(alert_id: Id, user: Editor, session: DbSession) -> AlertOut:
     alert = get_owned_or_404(session, user, Alert, alert_id, "Alert not found")
+    audit.info("alert_ack user_id=%s alert_id=%s", user.id, alert.id)
     alert.acknowledged = True
     session.add(alert)
     session.commit()
