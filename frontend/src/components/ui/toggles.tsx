@@ -3,18 +3,42 @@
 import { Languages, Monitor, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { flushSync } from "react-dom";
 
 import { locales, localeMeta } from "@/i18n/config";
 import { useLocale } from "@/lib/locale-context";
 import { cn } from "@/lib/utils";
 
 /**
+ * Light and dark should not swap in a single flash. Where the browser supports
+ * view transitions (and the user has not asked for reduced motion) the switch
+ * is a short cross-fade; otherwise it is instant.
+ */
+export function useThemeSwitch() {
+  const { setTheme } = useTheme();
+  return useCallback(
+    (next: string) => {
+      const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (reduce || typeof document.startViewTransition !== "function") {
+        setTheme(next);
+        return;
+      }
+      // flushSync commits the new class inside the transition callback, so
+      // the "after" snapshot really is the new theme.
+      document.startViewTransition(() => flushSync(() => setTheme(next)));
+    },
+    [setTheme],
+  );
+}
+
+/**
  * Theme toggle. It cycles light -> dark -> system rather than hiding the system
  * option, so a user who never set a preference can always get back to it.
  */
 export function ThemeToggle({ className }: { className?: string }) {
-  const { theme, setTheme } = useTheme();
+  const { theme } = useTheme();
+  const switchTheme = useThemeSwitch();
   const { dict } = useLocale();
   const [mounted, setMounted] = useState(false);
 
@@ -35,9 +59,9 @@ export function ThemeToggle({ className }: { className?: string }) {
       type="button"
       aria-label={`${dict.common.theme}: ${label}`}
       title={`${dict.common.theme}: ${label}`}
-      onClick={() => setTheme(order[(order.indexOf(current) + 1) % order.length])}
+      onClick={() => switchTheme(order[(order.indexOf(current) + 1) % order.length])}
       className={cn(
-        "inline-flex size-9 items-center justify-center rounded-[--radius-md] border border-line",
+        "tap-target inline-flex size-9 items-center justify-center rounded-md border border-line",
         "bg-surface-2 text-ink-2 transition-[color,background-color,transform] duration-150",
         "ease-[var(--ease-out)] hover:bg-surface-3 hover:text-ink active:scale-[0.93]",
         className,
@@ -65,7 +89,7 @@ export function LocaleToggle({ className }: { className?: string }) {
       title={localeMeta[other].label}
       onClick={() => router.push(target)}
       className={cn(
-        "inline-flex h-9 items-center gap-1.5 rounded-[--radius-md] border border-line px-2.5",
+        "tap-target inline-flex h-9 items-center gap-1.5 rounded-md border border-line px-2.5",
         "bg-surface-2 text-ink-2 transition-[color,background-color,transform] duration-150",
         "ease-[var(--ease-out)] hover:bg-surface-3 hover:text-ink active:scale-[0.95]",
         className,

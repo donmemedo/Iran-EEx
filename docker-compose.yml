@@ -6,7 +6,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-eex}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-eex_dev_password}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ${POSTGRES_DB:-eex}
     volumes:
       - db_data:/var/lib/postgresql/data
@@ -28,10 +28,16 @@ services:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-eex}:${POSTGRES_PASSWORD:-eex_dev_password}@db:5432/${POSTGRES_DB:-eex}
-      JWT_SECRET: ${JWT_SECRET:-change-me-in-production-eex-iran}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-eex}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-eex}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      # No fallback: the API refuses to start with a missing or weak secret.
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (openssl rand -hex 32)}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
-      SEED_ON_STARTUP: ${SEED_ON_STARTUP:-true}
+      # The reverse proxy's address. uvicorn trusts X-Forwarded-For only from it,
+      # so rate limits and logs see real client IPs instead of one shared address.
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
+      # Demo data and demo users with a published password. Local demos only.
+      SEED_ON_STARTUP: ${SEED_ON_STARTUP:-false}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
 
@@ -42,6 +48,7 @@ services:
         # Baked into the client bundle, so it must be the URL the *browser*
         # uses - not the internal service name.
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        NEXT_PUBLIC_DEMO_MODE: ${NEXT_PUBLIC_DEMO_MODE:-false}
     restart: unless-stopped
     depends_on:
       backend:

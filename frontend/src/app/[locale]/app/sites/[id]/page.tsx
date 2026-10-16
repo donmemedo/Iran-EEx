@@ -6,7 +6,17 @@ import { useParams } from "next/navigation";
 import { useState } from "react";
 import useSWR from "swr";
 
-import { AlertRow, EmptyState, FindingRow, KpiCard, PageHeader } from "@/components/app/pieces";
+import {
+  AlertRow,
+  EmptyState,
+  ErrorState,
+  FindingRow,
+  KpiCard,
+  markAcknowledged,
+  PageHeader,
+  useAcknowledgeAlert,
+  ViewOnlyNote,
+} from "@/components/app/pieces";
 import { BandDonut } from "@/components/charts/band-donut";
 import { PowerFactorGauge } from "@/components/charts/gauge";
 import { BandLegend, LoadChart } from "@/components/charts/load-chart";
@@ -22,6 +32,7 @@ import {
   formatNumber,
   formatPercent,
   formatTime,
+  listSeparator,
   splitToman,
 } from "@/lib/format";
 import { useLocale, useLocalized } from "@/lib/locale-context";
@@ -35,14 +46,39 @@ export default function SiteDetailPage() {
   const pick = useLocalized();
   const [range, setRange] = useState<Range>("24h");
 
-  const { data: site } = useSWR<Site>(`/api/v1/sites/${id}`, { refreshInterval: 60_000 });
-  const { data: series } = useSWR<ConsumptionSeries>(`/api/v1/sites/${id}/consumption?range=${range}`);
-  const { data: meters } = useSWR<{ feeders: Feeder[]; total_kw: number }>(`/api/v1/sites/${id}/meters`);
-  const { data: bills } = useSWR<Bill[]>(`/api/v1/bills?site_id=${id}&limit=12`);
-  const { data: findings } = useSWR<Finding[]>(`/api/v1/findings?site_id=${id}&status=open`);
-  const { data: alerts } = useSWR<Alert[]>(`/api/v1/alerts?site_id=${id}&limit=10`);
+  const siteQuery = useSWR<Site>(`/api/v1/sites/${id}`, { refreshInterval: 60_000 });
+  const seriesQuery = useSWR<ConsumptionSeries>(`/api/v1/sites/${id}/consumption?range=${range}`);
+  const metersQuery = useSWR<{ feeders: Feeder[]; total_kw: number }>(`/api/v1/sites/${id}/meters`);
+  const billsQuery = useSWR<Bill[]>(`/api/v1/bills?site_id=${id}&limit=12`);
+  const findingsQuery = useSWR<Finding[]>(`/api/v1/findings?site_id=${id}&status=open`);
+  const alertsQuery = useSWR<Alert[]>(`/api/v1/alerts?site_id=${id}&limit=10`);
+  const site = siteQuery.data;
+  const series = seriesQuery.data;
+  const meters = metersQuery.data;
+  const bills = billsQuery.data;
+  const findings = findingsQuery.data;
+  const alerts = alertsQuery.data;
+  const { acknowledge, failure, canEdit } = useAcknowledgeAlert(alertsQuery.mutate, markAcknowledged);
 
   const Back = dir === "rtl" ? ArrowRight : ArrowLeft;
+  const backLink = (
+    <Link
+      href={href("/app/sites")}
+      className="tap-target mb-4 inline-flex items-center gap-1.5 rounded-xs text-xs text-ink-3 transition-colors hover:text-ink"
+    >
+      <Back className="size-3.5" />
+      {dict.app.site.backToSites}
+    </Link>
+  );
+
+  if (siteQuery.error && !site) {
+    return (
+      <>
+        {backLink}
+        <ErrorState error={siteQuery.error} onRetry={() => siteQuery.mutate()} />
+      </>
+    );
+  }
 
   if (!site) {
     return (
@@ -60,21 +96,16 @@ export default function SiteDetailPage() {
   const potential = splitToman(site.annual_saving_potential, locale, dict.common);
   const verified = splitToman(site.verified_savings_ytd, locale, dict.common);
   const energy = series?.total_kwh ? formatEnergy(series.total_kwh, locale) : null;
+  const bandTotal = series ? formatEnergy(Object.values(series.bands).reduce((a, b) => a + b, 0), locale) : null;
   const isMonthly = range === "12m";
 
   return (
     <>
-      <Link
-        href={href("/app/sites")}
-        className="mb-4 inline-flex items-center gap-1.5 text-xs text-ink-3 transition-colors hover:text-ink"
-      >
-        <Back className="size-3.5" />
-        {dict.app.site.backToSites}
-      </Link>
+      {backLink}
 
       <PageHeader
         title={pick(site, "name")}
-        subtitle={`${pick(site, "city")}، ${pick(site, "province")} · ${
+        subtitle={`${pick(site, "city")}${listSeparator(locale)}${pick(site, "province")} · ${
           dict.industries.items[site.industry as keyof typeof dict.industries.items]
         }`}
         action={<Badge tone={siteStatusTone[site.status]}>{dict.app.sites.status[site.status]}</Badge>}
@@ -118,6 +149,7 @@ export default function SiteDetailPage() {
           action={
             <Segmented
               size="sm"
+              label={dict.app.site.range}
               value={range}
               onChange={setRange}
               options={(["24h", "7d", "30d", "12m"] as const).map((key) => ({
@@ -131,6 +163,7 @@ export default function SiteDetailPage() {
           {series ? (
             <>
               <LoadChart
+                label={dict.app.site.consumption}
                 points={series.points.map((point) => ({
                   ts: point.ts,
                   value: isMonthly ? point.kwh : point.kw,
@@ -183,6 +216,8 @@ export default function SiteDetailPage() {
                 />
               </dl>
             </>
+          ) : seriesQuery.error ? (
+            <ErrorState error={seriesQuery.error} onRetry={() => seriesQuery.mutate()} className="h-72 py-0" />
           ) : (
             <Skeleton className="h-72 w-full" />
           )}
@@ -193,13 +228,15 @@ export default function SiteDetailPage() {
         <Card>
           <CardHeader title={dict.app.dashboard.bandSplit} />
           <div className="p-5">
-            {series && (
+            {series && bandTotal ? (
               <BandDonut
                 data={series.bands}
                 size={148}
-                centerValue={formatEnergy(Object.values(series.bands).reduce((a, b) => a + b, 0), locale).value}
-                centerLabel={formatEnergy(Object.values(series.bands).reduce((a, b) => a + b, 0), locale).unit}
+                centerValue={bandTotal.value}
+                centerLabel={bandTotal.unit}
               />
+            ) : seriesQuery.error ? null : (
+              <Skeleton className="mx-auto size-37 rounded-full" />
             )}
           </div>
         </Card>
@@ -245,6 +282,8 @@ export default function SiteDetailPage() {
                   </li>
                 ))}
               </ul>
+            ) : metersQuery.error ? (
+              <ErrorState error={metersQuery.error} onRetry={() => metersQuery.mutate()} className="py-8" />
             ) : (
               <Skeleton className="h-40 w-full" />
             )}
@@ -267,6 +306,24 @@ export default function SiteDetailPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--line)]">
+                {!bills && (
+                  <tr>
+                    <td colSpan={5} className="p-3">
+                      {billsQuery.error ? (
+                        <ErrorState error={billsQuery.error} onRetry={() => billsQuery.mutate()} className="py-8" />
+                      ) : (
+                        <Skeleton className="h-32 w-full" />
+                      )}
+                    </td>
+                  </tr>
+                )}
+                {bills?.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="p-6 text-center text-sm text-ink-3">
+                      {dict.app.bills.noBills}
+                    </td>
+                  </tr>
+                )}
                 {bills?.map((bill) => {
                   const money = splitToman(bill.billed_total, locale, dict.common);
                   const kwh = formatEnergy(bill.total_kwh, locale);
@@ -287,7 +344,7 @@ export default function SiteDetailPage() {
                       <td className="p-3 text-end">
                         <Link
                           href={href(`/app/bills/${bill.id}`)}
-                          className="font-medium text-brand hover:opacity-75"
+                          className="tap-target rounded-xs font-medium text-brand hover:opacity-75"
                         >
                           {dict.common.viewMore}
                         </Link>
@@ -304,8 +361,20 @@ export default function SiteDetailPage() {
           <Card>
             <CardHeader title={dict.app.site.findings} />
             <div className="mt-3 divide-y divide-[var(--line)] border-t border-line">
-              {findings && findings.length > 0 ? (
-                findings.slice(0, 4).map((finding) => <FindingRow key={finding.id} finding={finding} />)
+              {!findings ? (
+                <div className="p-5">
+                  {findingsQuery.error ? (
+                    <ErrorState error={findingsQuery.error} onRetry={() => findingsQuery.mutate()} className="py-8" />
+                  ) : (
+                    <Skeleton className="h-24 w-full" />
+                  )}
+                </div>
+              ) : findings.length > 0 ? (
+                findings
+                  .slice(0, 4)
+                  .map((finding) => (
+                    <FindingRow key={finding.id} finding={finding} href={href("/app/findings")} />
+                  ))
               ) : (
                 <div className="p-5">
                   <EmptyState message={dict.app.findings.noFindings} icon={Sparkles} />
@@ -317,9 +386,23 @@ export default function SiteDetailPage() {
           <Card>
             <CardHeader title={dict.app.site.alerts} />
             <div className="mt-3 divide-y divide-[var(--line)] border-t border-line">
-              {alerts && alerts.length > 0 ? (
+              {!alerts ? (
+                <div className="p-5">
+                  {alertsQuery.error ? (
+                    <ErrorState error={alertsQuery.error} onRetry={() => alertsQuery.mutate()} className="py-8" />
+                  ) : (
+                    <Skeleton className="h-24 w-full" />
+                  )}
+                </div>
+              ) : alerts.length > 0 ? (
                 alerts.slice(0, 4).map((alert) => (
-                  <AlertRow key={alert.id} alert={alert} showSite={false} />
+                  <AlertRow
+                    key={alert.id}
+                    alert={alert}
+                    showSite={false}
+                    onAcknowledge={acknowledge && (() => acknowledge(alert.id))}
+                    error={failure?.id === alert.id ? failure.message : undefined}
+                  />
                 ))
               ) : (
                 <div className="p-5">
@@ -327,6 +410,7 @@ export default function SiteDetailPage() {
                 </div>
               )}
             </div>
+            {!canEdit && alerts && alerts.length > 0 && <ViewOnlyNote className="m-4" />}
           </Card>
         </div>
       </div>

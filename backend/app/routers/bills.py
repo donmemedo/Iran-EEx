@@ -1,55 +1,68 @@
 """Invoices and their audit findings."""
-from fastapi import APIRouter, HTTPException, Query
-from sqlmodel import func, select
+import logging
+
+from fastapi import APIRouter, Query
+from sqlmodel import Session, func, select
 
 from ..models import Bill, Finding, Site
-from ..schemas import BillDetail, BillOut, FindingOut
-from ..security import CurrentUser, DbSession
+from ..schemas import BillDetail, BillOut, FindingOut, FindingStatus, Id, SiteFilter
+from ..security import DbSession, Editor, OrgUser
+from ..tenancy import get_owned_or_404, org_site_ids
 
 router = APIRouter(tags=["bills"])
+audit = logging.getLogger("eex.audit")
 
 
-def _bill_out(session, bill: Bill) -> BillOut:
-    count, saving = session.exec(
-        select(func.count(Finding.id), func.coalesce(func.sum(Finding.annual_saving), 0.0)).where(
-            Finding.bill_id == bill.id
+def _bills_out(session: Session, bills: list[Bill]) -> list[BillOut]:
+    """Bills with their finding count and saving potential, in one grouped query."""
+    totals = {
+        bill_id: (int(count or 0), float(saving or 0.0))
+        for bill_id, count, saving in session.exec(
+            select(
+                Finding.bill_id,
+                func.count(Finding.id),
+                func.coalesce(func.sum(Finding.annual_saving), 0.0),
+            )
+            .where(Finding.bill_id.in_([b.id for b in bills]))
+            .group_by(Finding.bill_id)
+        ).all()
+    }
+    return [
+        BillOut(
+            **b.model_dump(exclude={"breakdown"}),
+            total_kwh=round(b.peak_kwh + b.mid_peak_kwh + b.off_peak_kwh, 1),
+            finding_count=totals.get(b.id, (0, 0.0))[0],
+            saving_potential=totals.get(b.id, (0, 0.0))[1],
         )
-    ).one()
-    return BillOut(
-        **bill.model_dump(exclude={"breakdown"}),
-        total_kwh=round(bill.peak_kwh + bill.mid_peak_kwh + bill.off_peak_kwh, 1),
-        finding_count=int(count or 0),
-        saving_potential=float(saving or 0.0),
-    )
+        for b in bills
+    ]
 
 
 @router.get("/bills", response_model=list[BillOut])
 def list_bills(
-    user: CurrentUser,
+    user: OrgUser,
     session: DbSession,
-    site_id: int | None = None,
-    status: str | None = None,
-    limit: int = Query(default=60, le=300),
+    site_id: SiteFilter = None,
+    status: str | None = Query(default=None, max_length=32),
+    limit: int = Query(default=60, ge=1, le=300),
 ) -> list[BillOut]:
-    stmt = select(Bill)
+    stmt = select(Bill).where(Bill.site_id.in_(org_site_ids(user)))
     if site_id:
         stmt = stmt.where(Bill.site_id == site_id)
     if status:
         stmt = stmt.where(Bill.status == status)
     bills = session.exec(stmt.order_by(Bill.issued_at.desc()).limit(limit)).all()
-    return [_bill_out(session, b) for b in bills]
+    return _bills_out(session, list(bills))
 
 
 @router.get("/bills/{bill_id}", response_model=BillDetail)
-def get_bill(bill_id: int, user: CurrentUser, session: DbSession) -> BillDetail:
-    bill = session.get(Bill, bill_id)
-    if not bill:
-        raise HTTPException(status_code=404, detail="Bill not found")
+def get_bill(bill_id: Id, user: OrgUser, session: DbSession) -> BillDetail:
+    bill = get_owned_or_404(session, user, Bill, bill_id, "Bill not found")
     site = session.get(Site, bill.site_id)
     findings = session.exec(
         select(Finding).where(Finding.bill_id == bill.id).order_by(Finding.annual_saving.desc())
     ).all()
-    base = _bill_out(session, bill)
+    base = _bills_out(session, [bill])[0]
     return BillDetail(
         **base.model_dump(),
         breakdown=bill.breakdown or {},
@@ -61,14 +74,14 @@ def get_bill(bill_id: int, user: CurrentUser, session: DbSession) -> BillDetail:
 
 @router.get("/findings", response_model=list[FindingOut])
 def list_findings(
-    user: CurrentUser,
+    user: OrgUser,
     session: DbSession,
-    site_id: int | None = None,
-    status: str | None = "open",
-    severity: str | None = None,
-    limit: int = Query(default=100, le=500),
+    site_id: SiteFilter = None,
+    status: FindingStatus | None = "open",
+    severity: str | None = Query(default=None, max_length=16),
+    limit: int = Query(default=100, ge=1, le=500),
 ) -> list[FindingOut]:
-    stmt = select(Finding)
+    stmt = select(Finding).where(Finding.site_id.in_(org_site_ids(user)))
     if site_id:
         stmt = stmt.where(Finding.site_id == site_id)
     if status:
@@ -81,16 +94,13 @@ def list_findings(
 
 @router.patch("/findings/{finding_id}", response_model=FindingOut)
 def update_finding(
-    finding_id: int,
-    status: str,
-    user: CurrentUser,
+    finding_id: Id,
+    status: FindingStatus,
+    user: Editor,
     session: DbSession,
 ) -> FindingOut:
-    if status not in {"open", "in_progress", "done", "dismissed"}:
-        raise HTTPException(status_code=422, detail="Unknown status")
-    finding = session.get(Finding, finding_id)
-    if not finding:
-        raise HTTPException(status_code=404, detail="Finding not found")
+    finding = get_owned_or_404(session, user, Finding, finding_id, "Finding not found")
+    audit.info("finding_status user_id=%s finding_id=%s %s->%s", user.id, finding.id, finding.status, status)
     finding.status = status
     session.add(finding)
     session.commit()

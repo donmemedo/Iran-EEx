@@ -2,8 +2,30 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, EmailStr, Field
+from fastapi import Path, Query
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+
+Industry = Literal["steel", "cement", "ceramic", "plastic", "food", "pharma", "textile", "other"]
+FindingStatus = Literal["open", "in_progress", "done", "dismissed"]
+
+# Ids beyond int64 make the SQLite driver raise (a 500); bound them to a 422.
+_INT64 = 2**63 - 1
+Id = Annotated[int, Path(ge=1, le=_INT64)]
+SiteFilter = Annotated[int | None, Query(ge=1, le=_INT64)]
+
+# Upper bounds that no real invoice reaches. They keep arithmetic finite and stop
+# absurd values from turning into huge numbers in responses.
+MAX_TOMAN = 1e13
+MAX_KWH = 1e10
+MAX_KW = 1e7
+
+
+class RequestModel(BaseModel):
+    """Base for request bodies: no NaN/Infinity, no unknown fields."""
+
+    model_config = ConfigDict(allow_inf_nan=False, extra="forbid", str_strip_whitespace=True)
 
 
 # --- auth -------------------------------------------------------------------
@@ -12,9 +34,15 @@ class Token(BaseModel):
     token_type: str = "bearer"
 
 
-class LoginRequest(BaseModel):
-    email: str
-    password: str
+class LoginRequest(RequestModel):
+    # Passwords are compared exactly: stripping would accept variants and lock out
+    # passwords that really start or end with a space.
+    model_config = ConfigDict(str_strip_whitespace=False)
+
+    # Plain str, not EmailStr: a malformed email must fail like a wrong password,
+    # not with a 422 that tells the caller something about the input.
+    email: str = Field(min_length=1, max_length=254)
+    password: str = Field(min_length=1, max_length=128)
 
 
 class UserOut(BaseModel):
@@ -123,19 +151,25 @@ class BillDetail(BillOut):
     site_name_en: str = ""
 
 
-class BillAnalyzeRequest(BaseModel):
+class BillAnalyzeRequest(RequestModel):
     """Ad-hoc analysis: paste the numbers off an invoice, get findings back."""
 
-    peak_kwh: float = Field(ge=0)
-    mid_peak_kwh: float = Field(ge=0)
-    off_peak_kwh: float = Field(ge=0)
-    contracted_demand_kw: float = Field(gt=0)
-    peak_demand_kw: float = Field(gt=0)
+    peak_kwh: float = Field(ge=0, le=MAX_KWH)
+    mid_peak_kwh: float = Field(ge=0, le=MAX_KWH)
+    off_peak_kwh: float = Field(ge=0, le=MAX_KWH)
+    contracted_demand_kw: float = Field(gt=0, le=MAX_KW)
+    peak_demand_kw: float = Field(gt=0, le=MAX_KW)
     power_factor: float = Field(gt=0, le=1)
     jalali_month: int = Field(default=1, ge=1, le=12)
-    billed_total: float | None = None
-    production_units: float | None = None
-    industry: str = "other"
+    billed_total: float | None = Field(default=None, gt=0, le=MAX_TOMAN)
+    production_units: float | None = Field(default=None, gt=0, le=1e9)
+    industry: Industry = "other"
+
+    @model_validator(mode="after")
+    def _some_energy(self) -> "BillAnalyzeRequest":
+        if self.peak_kwh + self.mid_peak_kwh + self.off_peak_kwh <= 0:
+            raise ValueError("At least one energy band must be greater than zero")
+        return self
 
 
 class BillAnalyzeResponse(BaseModel):
@@ -160,6 +194,10 @@ class AlertOut(BaseModel):
     threshold: float | None
     acknowledged: bool
     created_at: datetime
+
+
+class AlertCount(BaseModel):
+    unacknowledged: int
 
 
 # --- dashboard --------------------------------------------------------------
@@ -207,9 +245,9 @@ class SavingsOut(BaseModel):
 
 
 # --- public -----------------------------------------------------------------
-class CalculatorRequest(BaseModel):
-    monthly_bill: float = Field(gt=0, description="Monthly energy bill in Toman")
-    industry: str = "other"
+class CalculatorRequest(RequestModel):
+    monthly_bill: float = Field(gt=0, le=MAX_TOMAN, description="Monthly energy bill in Toman")
+    industry: Industry = "other"
     shifts: int = Field(default=2, ge=1, le=3)
     power_factor: float | None = Field(default=None, gt=0, le=1)
     has_peak_production: bool = True
@@ -228,16 +266,16 @@ class CalculatorResponse(BaseModel):
     roi_multiple: float
 
 
-class LeadRequest(BaseModel):
+class LeadRequest(RequestModel):
     company: str = Field(min_length=2, max_length=160)
     contact_name: str = Field(min_length=2, max_length=120)
-    phone: str = Field(min_length=6, max_length=32)
+    phone: str = Field(min_length=6, max_length=32, pattern=r"^[0-9۰-۹٠-٩+()\-\s]+$")
     email: EmailStr | None = None
-    industry: str = "other"
-    province: str = ""
-    monthly_bill: float | None = None
+    industry: Industry = "other"
+    province: str = Field(default="", max_length=80)
+    monthly_bill: float | None = Field(default=None, gt=0, le=MAX_TOMAN)
     message: str | None = Field(default=None, max_length=2000)
-    locale: str = "fa"
+    locale: Literal["fa", "en"] = "fa"
 
 
 class LeadResponse(BaseModel):

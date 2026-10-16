@@ -13,6 +13,11 @@ def init_db() -> None:
     from . import models  # noqa: F401  - ensure models are registered
 
     SQLModel.metadata.create_all(engine)
+    # create_all skips tables that already exist, so indexes added to an existing
+    # table (no migration tool yet) are created here.
+    for table in SQLModel.metadata.sorted_tables:
+        for index in table.indexes:
+            index.create(engine, checkfirst=True)
 
 
 def get_session() -> Generator[Session, None, None]:

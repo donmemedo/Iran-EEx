@@ -7,14 +7,33 @@
  */
 import type { Locale } from "@/i18n/config";
 
-const PERSIAN_DIGITS = ["۰", "۱", "۲", "۳", "۴", "۵", "۶", "۷", "۸", "۹"];
+/**
+ * Intl formatters are expensive to build and a chart renders hundreds of
+ * labels, so each locale + options pair is built once and reused.
+ * ponytail: the caches are unbounded. Keys come from option literals in the
+ * code, so they stay small; bound them with an LRU if options ever come from data.
+ */
+const numberFormats = new Map<string, Intl.NumberFormat>();
+const dateFormats = new Map<string, Intl.DateTimeFormat>();
+const relativeFormats = new Map<string, Intl.RelativeTimeFormat>();
 
-export function toPersianDigits(input: string | number): string {
-  return String(input).replace(/[0-9]/g, (d) => PERSIAN_DIGITS[Number(d)]);
+function cached<T>(cache: Map<string, T>, key: string, make: () => T): T {
+  let value = cache.get(key);
+  if (value === undefined) {
+    value = make();
+    cache.set(key, value);
+  }
+  return value;
 }
 
-export function localizeDigits(input: string, locale: Locale): string {
-  return locale === "fa" ? toPersianDigits(input) : input;
+function dateFormat(tag: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  return cached(dateFormats, `${tag}|${JSON.stringify(options)}`, () => new Intl.DateTimeFormat(tag, options));
+}
+
+
+/** The separator between list items: Persian uses its own comma. */
+export function listSeparator(locale: Locale): string {
+  return locale === "fa" ? "، " : ", ";
 }
 
 export function formatNumber(
@@ -23,11 +42,16 @@ export function formatNumber(
   options: Intl.NumberFormatOptions = {},
 ): string {
   if (!Number.isFinite(value)) return "—";
-  const formatted = new Intl.NumberFormat(locale === "fa" ? "fa-IR" : "en-US", {
-    maximumFractionDigits: 0,
-    ...options,
-  }).format(value);
-  return formatted;
+  const format = cached(
+    numberFormats,
+    `${locale}|${JSON.stringify(options)}`,
+    () =>
+      new Intl.NumberFormat(locale === "fa" ? "fa-IR" : "en-US", {
+        maximumFractionDigits: 0,
+        ...options,
+      }),
+  );
+  return format.format(value);
 }
 
 /**
@@ -115,7 +139,7 @@ export function formatPercent(value: number, locale: Locale, fractionDigits = 0)
 export function formatDate(value: string | Date, locale: Locale): string {
   const date = typeof value === "string" ? new Date(value) : value;
   if (Number.isNaN(date.getTime())) return "—";
-  return new Intl.DateTimeFormat(locale === "fa" ? "fa-IR-u-ca-persian" : "en-GB", {
+  return dateFormat(locale === "fa" ? "fa-IR-u-ca-persian" : "en-GB", {
     year: "numeric",
     month: "short",
     day: "numeric",
@@ -125,7 +149,7 @@ export function formatDate(value: string | Date, locale: Locale): string {
 export function formatTime(value: string | Date, locale: Locale): string {
   const date = typeof value === "string" ? new Date(value) : value;
   if (Number.isNaN(date.getTime())) return "—";
-  return new Intl.DateTimeFormat(locale === "fa" ? "fa-IR" : "en-GB", {
+  return dateFormat(locale === "fa" ? "fa-IR" : "en-GB", {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
@@ -141,7 +165,11 @@ export function formatDateTime(value: string | Date, locale: Locale): string {
 export function formatRelative(value: string | Date, locale: Locale): string {
   const date = typeof value === "string" ? new Date(value) : value;
   const diffMs = date.getTime() - Date.now();
-  const rtf = new Intl.RelativeTimeFormat(locale === "fa" ? "fa-IR" : "en", { numeric: "auto" });
+  const rtf = cached(
+    relativeFormats,
+    locale,
+    () => new Intl.RelativeTimeFormat(locale === "fa" ? "fa-IR" : "en", { numeric: "auto" }),
+  );
   const minutes = Math.round(diffMs / 60_000);
   if (Math.abs(minutes) < 60) return rtf.format(minutes, "minute");
   const hours = Math.round(minutes / 60);
@@ -153,7 +181,7 @@ export function formatRelative(value: string | Date, locale: Locale): string {
 export function formatMonthKey(key: string, locale: Locale): string {
   const [y, m] = key.split("-").map(Number);
   if (!y || !m) return key;
-  return new Intl.DateTimeFormat(locale === "fa" ? "fa-IR-u-ca-persian" : "en-GB", {
+  return dateFormat(locale === "fa" ? "fa-IR-u-ca-persian" : "en-GB", {
     month: "short",
     year: "2-digit",
   }).format(new Date(Date.UTC(y, m - 1, 15)));

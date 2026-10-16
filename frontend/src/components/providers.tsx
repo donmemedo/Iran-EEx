@@ -1,5 +1,6 @@
 "use client";
 
+import { MotionConfig } from "framer-motion";
 import { ThemeProvider } from "next-themes";
 import { SWRConfig } from "swr";
 import type { ReactNode } from "react";
@@ -31,7 +32,9 @@ export function Providers({
               dedupingInterval: 10_000,
             }}
           >
-            {children}
+            {/* With Reduce Motion on, transform and layout animations are dropped
+                and opacity fades remain - the non-vestibular equivalent. */}
+            <MotionConfig reducedMotion="user">{children}</MotionConfig>
           </SWRConfig>
         </AuthProvider>
       </LocaleProvider>

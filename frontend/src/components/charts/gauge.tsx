@@ -39,7 +39,14 @@ export function PowerFactorGauge({
 
   return (
     <div className={cn("relative shrink-0", className)} style={{ width: size, height: size * 0.78 }}>
-      <svg width={size} height={size} className="absolute inset-x-0 top-0" style={{ transform: "rotate(133deg)" }}>
+      {/* The reading below is the text alternative; the arc only illustrates it. */}
+      <svg
+        width={size}
+        height={size}
+        aria-hidden
+        className="absolute inset-x-0 top-0"
+        style={{ transform: "rotate(133deg)" }}
+      >
         <circle
           cx={size / 2}
           cy={size / 2}
@@ -116,7 +123,11 @@ export function Sparkline({
   );
 }
 
-/** A horizontal meter for a bounded ratio, such as load against capacity. */
+/**
+ * A horizontal meter for a bounded ratio, such as load against capacity. It
+ * always sits beside the number it illustrates, so it is hidden from assistive
+ * technology rather than read out twice.
+ */
 export function Meter({
   value,
   max = 100,
@@ -138,7 +149,7 @@ export function Meter({
     good: "var(--status-good)",
   };
   return (
-    <div className={cn("relative h-1.5 w-full overflow-hidden rounded-full bg-surface-3", className)}>
+    <div className={cn("relative h-1.5 w-full overflow-hidden rounded-full bg-surface-3", className)} aria-hidden>
       <div
         className="h-full rounded-full transition-[width] duration-500 ease-[var(--ease-out)]"
         style={{ width: `${fraction * 100}%`, background: colors[tone] }}

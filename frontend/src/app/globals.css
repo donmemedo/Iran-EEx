@@ -24,7 +24,8 @@
   /* Ink */
   --ink: #0a1210;
   --ink-2: #4a5551;
-  --ink-3: #78837e;
+  /* Tertiary ink still clears 4.5:1 on --surface and --surface-2. */
+  --ink-3: #66706c;
 
   /* Lines */
   --line: rgb(10 18 16 / 0.09);
@@ -73,7 +74,7 @@
 
   --ink: #e9efec;
   --ink-2: #9aa8a2;
-  --ink-3: #6e7a75;
+  --ink-3: #7d8984;
 
   --line: rgb(255 255 255 / 0.09);
   --line-strong: rgb(255 255 255 / 0.18);
@@ -168,6 +169,8 @@
 html {
   -webkit-text-size-adjust: 100%;
   scroll-behavior: smooth;
+  /* Controls draw their own pressed state on pointer-down. */
+  -webkit-tap-highlight-color: transparent;
 }
 
 body {
@@ -190,10 +193,10 @@ body {
   color: var(--ink);
 }
 
+/* The outline follows each element's own radius, so focus never reshapes a control. */
 :focus-visible {
   outline: 2px solid var(--brand);
   outline-offset: 2px;
-  border-radius: var(--radius-xs);
 }
 
 /* Tracking is size-specific: large text reads too loose at default spacing. */
@@ -224,6 +227,26 @@ html[lang="fa"] .display-3 {
 }
 html[lang="fa"] body {
   line-height: 1.85;
+}
+/* Letter-spacing pulls apart the joins of cursive Persian script, so tracking
+   utilities only shape Latin text. */
+:is(.tracking-tight, .tracking-tighter, .tracking-wide):lang(fa) {
+  letter-spacing: normal;
+}
+
+/* A hit area of at least 44px around a smaller control, without changing how
+   it looks. Centred physically, so it is the same in both directions. */
+@utility tap-target {
+  position: relative;
+  &::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: max(100%, 2.75rem);
+    height: max(100%, 2.75rem);
+    transform: translate(-50%, -50%);
+  }
 }
 
 .tabular {
@@ -341,6 +364,15 @@ html[lang="fa"] body {
   background: linear-gradient(90deg, transparent, var(--surface-3), transparent);
   animation: sweep 1.4s var(--ease-in-out) infinite;
 }
+[dir="rtl"] .skeleton::after {
+  animation-direction: reverse;
+}
+
+/* Theme changes cross-fade briefly instead of flashing (see ThemeToggle). */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 200ms;
+}
 
 /* Reduced motion keeps comprehension cues and drops the vestibular ones. */
 @media (prefers-reduced-motion: reduce) {
@@ -368,8 +400,19 @@ html[lang="fa"] body {
 }
 
 @media (prefers-contrast: more) {
-  :root {
+  :root:not(.dark) {
     --line: rgb(10 18 16 / 0.3);
+    --line-strong: rgb(10 18 16 / 0.45);
     --ink-2: #2c3634;
+    --ink-3: #4a5551;
+  }
+  .dark {
+    --line: rgb(255 255 255 / 0.3);
+    --line-strong: rgb(255 255 255 / 0.45);
+    --ink-2: #c9d3cf;
+    --ink-3: #a7b3ae;
+  }
+  .glass {
+    background: var(--surface);
   }
 }

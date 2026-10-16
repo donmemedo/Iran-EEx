@@ -3,7 +3,7 @@
 import Link from "next/link";
 import useSWR from "swr";
 
-import { EmptyState, PageHeader } from "@/components/app/pieces";
+import { EmptyState, ErrorState, PageHeader } from "@/components/app/pieces";
 import { Badge, billStatusTone } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 export default function BillsPage() {
   const { dict, locale, href } = useLocale();
   const pick = useLocalized();
-  const { data: bills, isLoading } = useSWR<Bill[]>("/api/v1/bills?limit=120");
+  const { data: bills, error, isLoading, mutate } = useSWR<Bill[]>("/api/v1/bills?limit=120");
   const { data: sites } = useSWR<Site[]>("/api/v1/sites");
 
   const siteById = new Map((sites ?? []).map((site) => [site.id, site]));
@@ -24,7 +24,9 @@ export default function BillsPage() {
     <>
       <PageHeader title={dict.app.bills.title} subtitle={dict.app.bills.subtitle} />
 
-      {isLoading ? (
+      {error && !bills ? (
+        <ErrorState error={error} onRetry={() => mutate()} />
+      ) : isLoading ? (
         <Skeleton className="h-96 w-full" />
       ) : !bills || bills.length === 0 ? (
         <EmptyState message={dict.app.bills.noBills} />
@@ -61,7 +63,7 @@ export default function BillsPage() {
                         {site ? (
                           <Link
                             href={href(`/app/sites/${site.id}`)}
-                            className="hover:text-brand"
+                            className="tap-target rounded-xs hover:text-brand"
                           >
                             {pick(site, "name")}
                           </Link>
@@ -81,17 +83,17 @@ export default function BillsPage() {
                           material ? "font-medium text-critical" : "text-ink-3",
                         )}
                       >
-                        {material ? `+${deltaMoney.value} ${deltaMoney.unit}` : "—"}
+                        {material ? `${delta > 0 ? "+" : "−"}${deltaMoney.value} ${deltaMoney.unit}` : "—"}
                       </td>
                       <td className="p-4">
-                        <Badge tone={billStatusTone[bill.status]}>
+                        <Badge tone={billStatusTone[bill.status]} className="tabular">
                           {dict.app.bills.status[bill.status]} · {formatNumber(bill.finding_count, locale)}
                         </Badge>
                       </td>
                       <td className="p-4 text-end whitespace-nowrap">
                         <Link
                           href={href(`/app/bills/${bill.id}`)}
-                          className="font-medium text-brand hover:opacity-75"
+                          className="tap-target rounded-xs font-medium text-brand hover:opacity-75"
                         >
                           {dict.common.viewMore}
                         </Link>

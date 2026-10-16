@@ -7,7 +7,7 @@ stringified annotations break that resolution.
 
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Column, Text
+from sqlalchemy import JSON, Column, Index, Text
 from sqlmodel import Field, Relationship, SQLModel
 
 
@@ -49,7 +49,8 @@ class Site(SQLModel, table=True):
     __tablename__ = "sites"
 
     id: int | None = Field(default=None, primary_key=True)
-    organization_id: int | None = Field(default=None, foreign_key="organizations.id")
+    # Every tenant-scoped query filters on this column.
+    organization_id: int | None = Field(default=None, foreign_key="organizations.id", index=True)
     name_fa: str
     name_en: str
     industry: str = "other"
@@ -82,6 +83,7 @@ class Site(SQLModel, table=True):
 
 class Bill(SQLModel, table=True):
     __tablename__ = "bills"
+    __table_args__ = (Index("ix_bills_site_issued", "site_id", "issued_at"),)
 
     id: int | None = Field(default=None, primary_key=True)
     site_id: int = Field(foreign_key="sites.id", index=True)
@@ -111,6 +113,7 @@ class Bill(SQLModel, table=True):
 
 class Finding(SQLModel, table=True):
     __tablename__ = "findings"
+    __table_args__ = (Index("ix_findings_site_status", "site_id", "status"),)
 
     id: int | None = Field(default=None, primary_key=True)
     bill_id: int = Field(foreign_key="bills.id", index=True)
@@ -137,6 +140,7 @@ class Finding(SQLModel, table=True):
 
 class Alert(SQLModel, table=True):
     __tablename__ = "alerts"
+    __table_args__ = (Index("ix_alerts_site_ack_created", "site_id", "acknowledged", "created_at"),)
 
     id: int | None = Field(default=None, primary_key=True)
     site_id: int = Field(foreign_key="sites.id", index=True)

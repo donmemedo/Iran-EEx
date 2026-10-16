@@ -2,7 +2,7 @@
 export const API_URL =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ?? "http://localhost:8000";
 
-const TOKEN_KEY = "eex.token";
+export const TOKEN_KEY = "eex.token";
 
 export function getToken(): string | null {
   if (typeof window === "undefined") return null;
@@ -23,13 +23,25 @@ export function setToken(token: string | null) {
   }
 }
 
+/** Fired on window when a request that carried a token gets 401 (session expired). */
+export const UNAUTHORIZED_EVENT = "eex:unauthorized";
+
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  /** Seconds to wait before retrying, from the Retry-After header (429), if sent. */
+  retryAfter: number | null;
+  constructor(message: string, status: number, retryAfter: number | null = null) {
     super(message);
     this.status = status;
+    this.retryAfter = retryAfter;
     this.name = "ApiError";
   }
+}
+
+/** Retry-After in seconds. Our API only sends delay-seconds, never an HTTP date. */
+function parseRetryAfter(value: string | null): number | null {
+  const seconds = Number(value);
+  return value && Number.isFinite(seconds) ? seconds : null;
 }
 
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -41,6 +53,12 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   const response = await fetch(`${API_URL}${path}`, { ...init, headers });
 
   if (!response.ok) {
+    if (response.status === 401 && token) {
+      // The session expired. Drop the token now so no later request reuses it;
+      // AuthProvider listens for the event and wipes the client data.
+      setToken(null);
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    }
     let message = response.statusText;
     try {
       const body = await response.json();
@@ -48,7 +66,7 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     } catch {
       /* body was not JSON */
     }
-    throw new ApiError(message, response.status);
+    throw new ApiError(message, response.status, parseRetryAfter(response.headers.get("Retry-After")));
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;

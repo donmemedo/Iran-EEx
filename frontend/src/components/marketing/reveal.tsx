@@ -1,39 +1,72 @@
 "use client";
 
-import { motion, useReducedMotion } from "framer-motion";
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
 
 /**
- * Scroll reveal. Under reduced motion it becomes a plain cross-fade with no
- * translation, which keeps the "something arrived" cue without the vestibular
- * part.
+ * One IntersectionObserver shared by every Reveal on the page. It writes a data
+ * attribute straight onto the element, so revealing never re-renders React and
+ * never reads layout on the main thread.
+ *
+ * Content is visible by default - without JavaScript, and for anything already
+ * on screen at load. Only elements that start fully below the viewport are
+ * hidden, and they fade up as they scroll in. Under Reduce Motion nothing is
+ * ever hidden: the content is simply there.
  */
+let observer: IntersectionObserver | null = null;
+
+function observe(element: HTMLElement) {
+  observer ??= new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        const target = entry.target as HTMLElement;
+        if (entry.isIntersecting) {
+          if (target.dataset.reveal === "out") target.dataset.reveal = "in";
+          observer?.unobserve(target);
+        } else if (!target.dataset.reveal) {
+          // First report. Hide it only if it is still entirely below the fold;
+          // anything on screen or above it (after a deep link) stays as it is.
+          const viewportBottom = (entry.rootBounds?.bottom ?? Infinity) + 60;
+          if (entry.boundingClientRect.top >= viewportBottom) target.dataset.reveal = "out";
+          else observer?.unobserve(target);
+        }
+      }
+    },
+    { rootMargin: "0px 0px -60px 0px" },
+  );
+  observer.observe(element);
+  return () => observer?.unobserve(element);
+}
+
 export function Reveal({
   children,
   delay = 0,
   className,
-  as: Tag = "div",
+  as = "div",
 }: {
   children: ReactNode;
   delay?: number;
   className?: string;
   as?: "div" | "section" | "li" | "article";
 }) {
-  const reduceMotion = useReducedMotion();
-  const Component = motion[Tag] as typeof motion.div;
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => (ref.current ? observe(ref.current) : undefined), []);
 
+  // The tag varies but the ref target is just an element, so one type serves.
+  const Tag = as as "div";
   return (
-    <Component
-      initial={{ opacity: 0, y: reduceMotion ? 0 : 18 }}
-      whileInView={{ opacity: 1, y: 0 }}
-      viewport={{ once: true, margin: "-80px" }}
-      transition={{ duration: 0.55, delay, ease: [0.23, 1, 0.32, 1] }}
-      className={className}
+    <Tag
+      ref={ref}
+      className={cn(
+        "motion-safe:data-[reveal=out]:opacity-0 motion-safe:data-[reveal=out]:translate-y-[18px]",
+        "motion-safe:data-[reveal=in]:transition-[opacity,translate] motion-safe:data-[reveal=in]:duration-550 motion-safe:data-[reveal=in]:ease-[var(--ease-out)]",
+        className,
+      )}
+      style={delay ? { transitionDelay: `${delay}s` } : undefined}
     >
       {children}
-    </Component>
+    </Tag>
   );
 }
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import math
 from dataclasses import dataclass
+from functools import lru_cache
 from datetime import UTC, datetime, timedelta
 
 # Tariff bands by local hour.
@@ -38,7 +39,7 @@ def _hash_unit(*parts) -> float:
     return int.from_bytes(digest, "big") / 2**64
 
 
-@dataclass
+@dataclass(frozen=True)  # hashable, so month roll-ups can be cached per profile
 class SiteProfile:
     """Everything the generator needs to know about a site."""
 
@@ -124,15 +125,30 @@ def sample(profile: SiteProfile, ts: datetime) -> dict:
 
 def series(profile: SiteProfile, start: datetime, end: datetime, step_minutes: int) -> list[dict]:
     """A reading series between two instants."""
-    out: list[dict] = []
     step = timedelta(minutes=step_minutes)
     cursor = start.replace(second=0, microsecond=0)
     # Align to the step grid so points are stable regardless of "now".
     cursor -= timedelta(minutes=cursor.minute % step_minutes)
-    while cursor <= end:
-        out.append(sample(profile, cursor))
+    if end < cursor:
+        return []
+    # The last grid point at or before `end`: the series only changes when a new
+    # slot starts, so a dashboard refresh within the same slot is a cache hit.
+    last = cursor + step * ((end - cursor) // step)
+    return [dict(r) for r in _grid_series(profile, cursor, last, step)]
+
+
+def _grid(profile: SiteProfile, first: datetime, last: datetime, step: timedelta):
+    cursor = first
+    while cursor <= last:
+        yield sample(profile, cursor)
         cursor += step
-    return out
+
+
+@lru_cache(maxsize=256)
+def _grid_series(profile: SiteProfile, first: datetime, last: datetime, step: timedelta) -> tuple:
+    # ponytail: at most ~20 MB at maxsize with the longest (30d) series; size it to
+    # sites x ranges if the portfolio grows past ~60 sites.
+    return tuple(_grid(profile, first, last, step))
 
 
 def aggregate_bands(readings: list[dict]) -> dict[str, float]:
@@ -165,29 +181,40 @@ def downsample(readings: list[dict], max_points: int) -> list[dict]:
     return out
 
 
+@lru_cache(maxsize=4096)
+def _month_summary(profile: SiteProfile, month_start: datetime, month_end: datetime) -> dict:
+    """kWh, band split, peak and mean power factor for one month at hourly resolution.
+
+    Readings are deterministic, so a finished month never changes and is computed
+    once per process. ponytail: unbounded by time, bounded by maxsize; 4096 entries is
+    about 340 site-years, far beyond the portfolio size.
+    """
+    # Straight from the generator: month-long hourly series would crowd the series cache.
+    readings = list(_grid(profile, month_start, month_end, timedelta(hours=1)))
+    # One-hour slots, so each reading's kW is also its kWh.
+    bands = {"peak": 0.0, "mid_peak": 0.0, "off_peak": 0.0}
+    for r in readings:
+        bands[r["band"]] += r["kw"]
+    bands = {k: round(v, 1) for k, v in bands.items()}
+    return {
+        "month": month_start.strftime("%Y-%m"),
+        "kwh": round(sum(bands.values()), 1),
+        **bands,
+        "peak_kw": round(max((r["kw"] for r in readings), default=0.0), 1),
+        "power_factor": round(sum(r["power_factor"] for r in readings) / max(len(readings), 1), 3),
+    }
+
+
 def monthly_totals(profile: SiteProfile, months: int = 12, end: datetime | None = None) -> list[dict]:
     """Per-month kWh and band split, walking backwards from `end`."""
     end = end or datetime.now(UTC)
+    # Hourly readings only change on the hour, so the open month caches for an hour too.
+    end_hour = end.replace(minute=0, second=0, microsecond=0)
     out: list[dict] = []
     cursor = end.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    for i in range(months):
+    for _ in range(months):
         month_start = cursor
         next_month = (month_start + timedelta(days=32)).replace(day=1)
-        # Hourly resolution is enough for a monthly roll-up and keeps this fast.
-        readings = series(profile, month_start, min(next_month, end), 60)
-        for r in readings:
-            r["kwh"] = r["kw"]  # one-hour slots
-        bands = aggregate_bands(readings)
-        out.append(
-            {
-                "month": month_start.strftime("%Y-%m"),
-                "kwh": round(sum(bands.values()), 1),
-                **bands,
-                "peak_kw": round(max((r["kw"] for r in readings), default=0.0), 1),
-                "power_factor": round(
-                    sum(r["power_factor"] for r in readings) / max(len(readings), 1), 3
-                ),
-            }
-        )
+        out.append(dict(_month_summary(profile, month_start, min(next_month, end_hour))))
         cursor = (month_start - timedelta(days=1)).replace(day=1)
     return list(reversed(out))

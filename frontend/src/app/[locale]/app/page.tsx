@@ -7,10 +7,21 @@ import useSWR from "swr";
 import { BandDonut } from "@/components/charts/band-donut";
 import { BarSeries } from "@/components/charts/bar-series";
 import { BandLegend, LoadChart } from "@/components/charts/load-chart";
-import { AlertRow, EmptyState, FindingRow, KpiCard, PageHeader, SiteCard } from "@/components/app/pieces";
+import {
+  AlertRow,
+  EmptyState,
+  ErrorState,
+  FindingRow,
+  KpiCard,
+  markAcknowledged,
+  PageHeader,
+  SiteCard,
+  useAcknowledgeAlert,
+  ViewOnlyNote,
+} from "@/components/app/pieces";
 import { Card, CardHeader } from "@/components/ui/card";
 import { SkeletonCard } from "@/components/ui/skeleton";
-import { apiFetch, type DashboardData } from "@/lib/api";
+import type { DashboardData } from "@/lib/api";
 import {
   formatEnergy,
   formatMonthKey,
@@ -24,12 +35,26 @@ import { useLocale, useLocalized } from "@/lib/locale-context";
 export default function DashboardPage() {
   const { dict, locale, href } = useLocale();
   const pick = useLocalized();
-  const { data, isLoading, mutate } = useSWR<DashboardData>("/api/v1/dashboard", {
+  const { data, error, mutate } = useSWR<DashboardData>("/api/v1/dashboard", {
     // The portfolio load is a live figure; refresh it while the tab is open.
     refreshInterval: 60_000,
   });
+  const { acknowledge, failure, canEdit } = useAcknowledgeAlert(mutate, (current, id) => ({
+    ...current,
+    recent_alerts: markAcknowledged(current.recent_alerts, id),
+    kpis: { ...current.kpis, unacknowledged_alerts: Math.max(0, current.kpis.unacknowledged_alerts - 1) },
+  }));
 
-  if (isLoading || !data) {
+  if (error && !data) {
+    return (
+      <>
+        <PageHeader title={dict.app.dashboard.title} subtitle={dict.app.dashboard.greeting} />
+        <ErrorState error={error} onRetry={() => mutate()} />
+      </>
+    );
+  }
+
+  if (!data) {
     return (
       <>
         <PageHeader title={dict.app.dashboard.title} subtitle={dict.app.dashboard.greeting} />
@@ -49,11 +74,6 @@ export default function DashboardPage() {
   const load = formatNumber(kpis.total_kw_now / 1000, locale, { maximumFractionDigits: 1 });
   const totalBandKwh = Object.values(data.band_split).reduce((sum, value) => sum + value, 0);
   const totalEnergy = formatEnergy(totalBandKwh, locale);
-
-  async function acknowledge(id: number) {
-    await apiFetch(`/api/v1/alerts/${id}/acknowledge`, { method: "POST" });
-    void mutate();
-  }
 
   return (
     <>
@@ -131,6 +151,7 @@ export default function DashboardPage() {
           />
           <div className="p-3 sm:p-5">
             <LoadChart
+              label={dict.app.dashboard.portfolioLoad}
               points={data.portfolio_load.map((point, index) => ({
                 ts: point.ts,
                 value: point.kw,
@@ -157,7 +178,7 @@ export default function DashboardPage() {
               centerValue={totalEnergy.value}
               centerLabel={totalEnergy.unit}
             />
-            <p className="mt-5 rounded-[--radius-md] border border-line bg-surface-2 p-3 text-[0.6875rem] leading-relaxed text-ink-2">
+            <p className="mt-5 rounded-md border border-line bg-surface-2 p-3 text-[0.6875rem] leading-relaxed text-ink-2">
               {locale === "fa"
                 ? `سهم اوج بار ${formatPercent(kpis.peak_share * 100, locale, 1)} است. هر درصد کاهش این سهم، مستقیماً از هزینه انرژی کم می‌کند.`
                 : `The peak band is ${formatPercent(kpis.peak_share * 100, locale, 1)} of consumption. Every point shaved off it comes straight off the energy bill.`}
@@ -171,6 +192,7 @@ export default function DashboardPage() {
           <CardHeader title={dict.app.dashboard.savingsTrend} hint={dict.common.millionToman} />
           <div className="p-3 sm:p-5">
             <BarSeries
+              label={dict.app.dashboard.savingsTrend}
               points={data.savings_trend.map((item) => ({
                 key: item.month,
                 label: formatMonthKey(item.month, locale),
@@ -190,7 +212,7 @@ export default function DashboardPage() {
           <CardHeader
             title={dict.app.dashboard.topFindings}
             action={
-              <Link href={href("/app/findings")} className="text-[0.6875rem] font-medium text-brand hover:opacity-75">
+              <Link href={href("/app/findings")} className="tap-target rounded-xs text-[0.6875rem] font-medium text-brand hover:opacity-75">
                 {dict.common.viewAll}
               </Link>
             }
@@ -208,6 +230,7 @@ export default function DashboardPage() {
                     key={finding.id}
                     finding={finding}
                     siteName={site ? pick(site, "name") : undefined}
+                    href={href("/app/findings")}
                   />
                 );
               })
@@ -221,7 +244,7 @@ export default function DashboardPage() {
           <CardHeader
             title={dict.app.dashboard.sitesOverview}
             action={
-              <Link href={href("/app/sites")} className="text-[0.6875rem] font-medium text-brand hover:opacity-75">
+              <Link href={href("/app/sites")} className="tap-target rounded-xs text-[0.6875rem] font-medium text-brand hover:opacity-75">
                 {dict.common.viewAll}
               </Link>
             }
@@ -237,7 +260,7 @@ export default function DashboardPage() {
           <CardHeader
             title={dict.app.dashboard.recentAlerts}
             action={
-              <Link href={href("/app/alerts")} className="text-[0.6875rem] font-medium text-brand hover:opacity-75">
+              <Link href={href("/app/alerts")} className="tap-target rounded-xs text-[0.6875rem] font-medium text-brand hover:opacity-75">
                 {dict.common.viewAll}
               </Link>
             }
@@ -251,10 +274,16 @@ export default function DashboardPage() {
               data.recent_alerts
                 .slice(0, 5)
                 .map((alert) => (
-                  <AlertRow key={alert.id} alert={alert} onAcknowledge={() => acknowledge(alert.id)} />
+                  <AlertRow
+                    key={alert.id}
+                    alert={alert}
+                    onAcknowledge={acknowledge && (() => acknowledge(alert.id))}
+                    error={failure?.id === alert.id ? failure.message : undefined}
+                  />
                 ))
             )}
           </div>
+          {!canEdit && data.recent_alerts.length > 0 && <ViewOnlyNote className="m-4" />}
         </Card>
       </div>
     </>
@@ -263,14 +292,14 @@ export default function DashboardPage() {
 
 /** Tehran-local tariff band for a timestamp, so the strip under the portfolio
  *  chart matches what the meter is actually being billed at. */
+const tehranHour = new Intl.DateTimeFormat("en-GB", {
+  hour: "2-digit",
+  hour12: false,
+  timeZone: "Asia/Tehran",
+});
+
 function bandForTimestamp(ts: string): string {
-  const hour = Number(
-    new Intl.DateTimeFormat("en-GB", {
-      hour: "2-digit",
-      hour12: false,
-      timeZone: "Asia/Tehran",
-    }).format(new Date(ts)),
-  );
+  const hour = Number(tehranHour.format(new Date(ts)));
   if (hour >= 19 && hour < 23) return "peak";
   if (hour >= 7 && hour < 19) return "mid_peak";
   return "off_peak";

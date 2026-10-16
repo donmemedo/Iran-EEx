@@ -2,8 +2,9 @@
 
 import { useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { mutate } from "swr";
 
-import { ApiError, apiFetch, getToken, setToken, type User } from "./api";
+import { ApiError, apiFetch, getToken, setToken, TOKEN_KEY, UNAUTHORIZED_EVENT, type User } from "./api";
 
 interface AuthContextValue {
   user: User | null;
@@ -13,6 +14,22 @@ interface AuthContextValue {
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+
+/**
+ * Forget everything the previous session fetched: the SWR cache and the
+ * service worker's API caches (names ending in "-data", see public/sw.js).
+ * Those caches are keyed by URL only, so they must not outlive a session.
+ */
+export async function clearClientData() {
+  await mutate(() => true, undefined, { revalidate: false });
+  if (typeof window === "undefined" || !("caches" in window)) return;
+  try {
+    const names = await caches.keys();
+    await Promise.all(names.filter((name) => name.endsWith("-data")).map((name) => caches.delete(name)));
+  } catch {
+    /* Cache Storage can be unavailable (private window, insecure origin) */
+  }
+}
 
 export function AuthProvider({ children, locale }: { children: ReactNode; locale: string }) {
   const [user, setUser] = useState<User | null>(null);
@@ -32,8 +49,9 @@ export function AuthProvider({ children, locale }: { children: ReactNode; locale
         setStatus("authenticated");
       })
       .catch(() => {
+        // A 401 already cleared the token in apiFetch. Any other failure
+        // (offline, server down) keeps it, so the next load can try again.
         if (cancelled) return;
-        setToken(null);
         setStatus("anonymous");
       });
     return () => {
@@ -41,7 +59,39 @@ export function AuthProvider({ children, locale }: { children: ReactNode; locale
     };
   }, []);
 
+  const endSession = useCallback(() => {
+    setToken(null);
+    void clearClientData();
+    setUser(null);
+    setStatus("anonymous");
+  }, []);
+
+  // Session expired: apiFetch saw a 401 on a request that carried a token.
+  useEffect(() => {
+    function onUnauthorized() {
+      endSession();
+      // Only the app area needs a session. Public pages (and the login page
+      // itself, which would loop) stay where they are.
+      if (window.location.pathname.startsWith(`/${locale}/app`)) router.replace(`/${locale}/login`);
+    }
+    // Logged out in another tab: the token is gone there, so end this tab's session
+    // too instead of leaving the previous user's data on screen.
+    function onStorage(event: StorageEvent) {
+      if (event.key === TOKEN_KEY && event.newValue === null) onUnauthorized();
+    }
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, [endSession, router, locale]);
+
   const login = useCallback(async (email: string, password: string) => {
+    // Start clean: no stale Authorization header on the login request, and
+    // nothing cached by a previous user survives into this session.
+    setToken(null);
+    await clearClientData();
     const { access_token } = await apiFetch<{ access_token: string }>("/api/v1/auth/login", {
       method: "POST",
       body: JSON.stringify({ email, password }),
@@ -53,11 +103,9 @@ export function AuthProvider({ children, locale }: { children: ReactNode; locale
   }, []);
 
   const logout = useCallback(() => {
-    setToken(null);
-    setUser(null);
-    setStatus("anonymous");
+    endSession();
     router.push(`/${locale}/login`);
-  }, [router, locale]);
+  }, [endSession, router, locale]);
 
   return (
     <AuthContext.Provider value={{ user, status, login, logout }}>{children}</AuthContext.Provider>

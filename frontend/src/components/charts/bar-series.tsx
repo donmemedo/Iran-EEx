@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { useLocale } from "@/lib/locale-context";
 import { cn } from "@/lib/utils";
@@ -18,10 +18,12 @@ export interface BarPoint {
 /**
  * A column chart for month-over-month values. Bars carry 4px rounded ends at
  * the data end only, anchored to the baseline, and sit on a 2px gap from their
- * neighbours.
+ * neighbours. As with LoadChart, a visually hidden table is the text
+ * alternative and the SVG itself is hidden from assistive technology.
  */
 export function BarSeries({
   points,
+  label,
   height = 200,
   formatValue,
   formatAxisValue,
@@ -30,6 +32,8 @@ export function BarSeries({
   mutedLabel,
 }: {
   points: BarPoint[];
+  /** What the chart shows; captions the accessible data table. */
+  label?: string;
   height?: number;
   formatValue: (value: number) => string;
   formatAxisValue: (value: number) => string;
@@ -51,6 +55,24 @@ export function BarSeries({
   const plotWidth = Math.max(0, width - padding.left - padding.right);
   const plotHeight = Math.max(0, height - padding.top - padding.bottom);
 
+  // Scales and bar outlines change with the data and size, not with hover.
+  const geometry = useMemo(() => {
+    const maxValue = Math.max(...points.map((p) => p.value), 1);
+    const { max, ticks } = niceTicks(maxValue * 1.1, 3);
+    const y = linearScale([0, max], [padding.top + plotHeight, padding.top]);
+    const slot = points.length ? plotWidth / points.length : 0;
+    const barWidth = Math.max(6, Math.min(34, slot - 8));
+    const bars = points.map((point, index) => {
+      const x = padding.left + slot * index + (slot - barWidth) / 2;
+      const top = y(point.value);
+      const barHeight = Math.max(2, padding.top + plotHeight - top);
+      const radius = Math.min(4, barHeight / 2, barWidth / 2);
+      // Rounded corners on the data end only; the baseline end stays square.
+      return `M${x},${top + barHeight} L${x},${top + radius} Q${x},${top} ${x + radius},${top} L${x + barWidth - radius},${top} Q${x + barWidth},${top} ${x + barWidth},${top + radius} L${x + barWidth},${top + barHeight} Z`;
+    });
+    return { ticks, y, slot, bars };
+  }, [points, plotWidth, plotHeight, padding.left, padding.top]);
+
   if (points.length === 0) {
     return (
       <div className={cn("flex items-center justify-center text-sm text-ink-3", className)} style={{ height }}>
@@ -59,18 +81,35 @@ export function BarSeries({
     );
   }
 
-  const maxValue = Math.max(...points.map((p) => p.value), 1);
-  const { max, ticks } = niceTicks(maxValue * 1.1, 3);
-  const y = linearScale([0, max], [padding.top + plotHeight, padding.top]);
-  const slot = plotWidth / points.length;
-  const barWidth = Math.max(6, Math.min(34, slot - 8));
+  const { ticks, y, slot, bars } = geometry;
   const activePoint = active !== null ? points[active] : null;
 
   return (
     <div ref={ref} className={cn("relative", className)} style={{ height }}>
+      <table className="sr-only">
+        {label && <caption>{label}</caption>}
+        <thead>
+          <tr>
+            <th scope="col">{dict.chart.time}</th>
+            <th scope="col">{dict.chart.value}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {points.map((point) => (
+            <tr key={point.key}>
+              <th scope="row">{point.label}</th>
+              <td>
+                {formatValue(point.value)}
+                {point.muted && mutedLabel && ` (${mutedLabel})`}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
       {width > 0 && (
         <>
-          <svg width={width} height={height} className="overflow-visible">
+          {/* Absolute, so the measured width never props the container open. */}
+          <svg width={width} height={height} aria-hidden className="absolute inset-0 overflow-visible">
             {ticks.map((tick) => (
               <g key={tick}>
                 <line
@@ -93,32 +132,25 @@ export function BarSeries({
               </g>
             ))}
 
-            {points.map((point, index) => {
-              const x = padding.left + slot * index + (slot - barWidth) / 2;
-              const top = y(point.value);
-              const barHeight = Math.max(2, padding.top + plotHeight - top);
-              const radius = Math.min(4, barHeight / 2, barWidth / 2);
-              return (
-                <g key={point.key}>
-                  {/* Rounded corners on the data end only; the baseline end stays square. */}
-                  <path
-                    d={`M${x},${top + barHeight} L${x},${top + radius} Q${x},${top} ${x + radius},${top} L${x + barWidth - radius},${top} Q${x + barWidth},${top} ${x + barWidth},${top + radius} L${x + barWidth},${top + barHeight} Z`}
-                    fill={point.muted ? "var(--surface-3)" : color}
-                    opacity={active !== null && active !== index ? 0.45 : 1}
-                    className="transition-opacity duration-150 ease-[var(--ease-out)]"
-                  />
-                  <rect
-                    x={padding.left + slot * index}
-                    y={padding.top}
-                    width={slot}
-                    height={plotHeight}
-                    fill="transparent"
-                    onPointerEnter={() => setActive(index)}
-                    onPointerLeave={() => setActive(null)}
-                  />
-                </g>
-              );
-            })}
+            {points.map((point, index) => (
+              <g key={point.key}>
+                <path
+                  d={bars[index]}
+                  fill={point.muted ? "var(--surface-3)" : color}
+                  opacity={active !== null && active !== index ? 0.45 : 1}
+                  className="transition-opacity duration-150 ease-[var(--ease-out)]"
+                />
+                <rect
+                  x={padding.left + slot * index}
+                  y={padding.top}
+                  width={slot}
+                  height={plotHeight}
+                  fill="transparent"
+                  onPointerEnter={() => setActive(index)}
+                  onPointerLeave={() => setActive(null)}
+                />
+              </g>
+            ))}
 
             <line
               x1={padding.left}
@@ -149,7 +181,7 @@ export function BarSeries({
 
           {activePoint && (
             <div
-              className="pointer-events-none absolute z-10 -translate-x-1/2 rounded-[--radius-md] border border-line bg-glass glass px-2.5 py-1.5 shadow-[var(--shadow-md)] rtl:translate-x-1/2"
+              className="pointer-events-none absolute z-10 -translate-x-1/2 rounded-md border border-line bg-glass glass px-2.5 py-1.5 shadow-[var(--shadow-md)]"
               style={{
                 left: padding.left + slot * (active ?? 0) + slot / 2,
                 top: Math.max(0, y(activePoint.value) - 46),

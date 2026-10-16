@@ -2,7 +2,7 @@
 
 import { Menu, X } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button, ButtonLink } from "@/components/ui/button";
 import { LocaleToggle, ThemeToggle } from "@/components/ui/toggles";
@@ -11,10 +11,15 @@ import { cn } from "@/lib/utils";
 
 import { Logo } from "./logo";
 
+// The "demonstration build" note is only true when the backend seeds demo data.
+const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+
 export function SiteHeader() {
   const { dict, href } = useLocale();
   const [scrolled, setScrolled] = useState(false);
   const [open, setOpen] = useState(false);
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const sheetRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 8);
@@ -23,13 +28,33 @@ export function SiteHeader() {
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
-  // Lock the page behind the mobile sheet.
+  // While the sheet is open: lock the page behind it, move focus into it, close
+  // on Escape (handing focus back to the toggle), and close if the viewport
+  // grows into the desktop layout - the sheet hides there, the lock would not.
   useEffect(() => {
-    document.body.style.overflow = open ? "hidden" : "";
+    if (!open) return;
+    document.body.style.overflow = "hidden";
+    sheetRef.current?.querySelector<HTMLElement>("a")?.focus();
+    const desktop = window.matchMedia("(min-width: 64rem)");
+    const onDesktop = () => setOpen(false);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      toggleRef.current?.focus();
+    };
+    document.addEventListener("keydown", onKey);
+    desktop.addEventListener("change", onDesktop);
     return () => {
       document.body.style.overflow = "";
+      document.removeEventListener("keydown", onKey);
+      desktop.removeEventListener("change", onDesktop);
     };
   }, [open]);
+
+  function dismiss() {
+    setOpen(false);
+    toggleRef.current?.focus();
+  }
 
   const links = [
     { href: "#platform", label: dict.nav.platform },
@@ -57,7 +82,7 @@ export function SiteHeader() {
               <a
                 key={link.href}
                 href={link.href}
-                className="rounded-[--radius-sm] px-3 py-2 text-[0.8125rem] font-medium text-ink-2 transition-colors duration-150 hover:bg-surface-2 hover:text-ink"
+                className="rounded-sm px-3 py-2.5 text-[0.8125rem] font-medium text-ink-2 transition-colors duration-150 hover:bg-surface-2 hover:text-ink"
               >
                 {link.label}
               </a>
@@ -74,49 +99,62 @@ export function SiteHeader() {
               {dict.nav.requestDemo}
             </ButtonLink>
             <Button
+              ref={toggleRef}
               variant="secondary"
               size="sm"
               className="!px-2.5 lg:hidden"
               aria-label={dict.common.menu}
               aria-expanded={open}
+              aria-controls="site-menu"
               onClick={() => setOpen((value) => !value)}
             >
-              {open ? <Menu className="size-4" /> : <Menu className="size-4" />}
+              {open ? <X className="size-4" aria-hidden /> : <Menu className="size-4" aria-hidden />}
             </Button>
           </div>
         </div>
       </header>
 
       {/* Mobile sheet. It enters and leaves along the same path - down from the
-          bar it belongs to - so dismissing it feels like the reverse of opening. */}
+          bar it belongs to - so dismissing it feels like the reverse of opening.
+          Closed, it is inert: out of the tab order and the accessibility tree. */}
       <div
         className={cn(
           "fixed inset-0 z-40 lg:hidden",
           open ? "pointer-events-auto" : "pointer-events-none",
         )}
-        aria-hidden={!open}
+        inert={!open}
       >
+        {/* A plain dimming scrim: no blur, so Reduce Transparency has nothing to undo. */}
         <div
           className={cn(
-            "absolute inset-0 bg-[var(--plane)]/70 backdrop-blur-sm transition-opacity duration-200 ease-[var(--ease-out)]",
+            "absolute inset-0 bg-plane/80 transition-opacity duration-200 ease-[var(--ease-out)]",
             open ? "opacity-100" : "opacity-0",
           )}
-          onClick={() => setOpen(false)}
+          onClick={dismiss}
+          aria-hidden
         />
         <div
+          id="site-menu"
+          ref={sheetRef}
+          // Tabbing out past the last item closes the sheet rather than leaving
+          // focus on the page hidden behind the scrim.
+          onBlur={(event) => {
+            const next = event.relatedTarget as Node | null;
+            if (next && !event.currentTarget.contains(next) && next !== toggleRef.current) setOpen(false);
+          }}
           className={cn(
             "absolute inset-x-0 top-16 origin-top border-b border-line bg-surface p-4 shadow-[var(--shadow-lg)]",
-            "transition-[transform,opacity] duration-250 ease-[var(--ease-drawer)]",
+            "transition-[translate,opacity] duration-250 ease-[var(--ease-drawer)]",
             open ? "translate-y-0 opacity-100" : "-translate-y-3 opacity-0",
           )}
         >
-          <nav className="flex flex-col">
+          <nav className="flex flex-col" aria-label={dict.common.menu}>
             {links.map((link) => (
               <a
                 key={link.href}
                 href={link.href}
                 onClick={() => setOpen(false)}
-                className="rounded-[--radius-md] px-3 py-3 text-sm font-medium text-ink-2 transition-colors hover:bg-surface-2 hover:text-ink"
+                className="rounded-md px-3 py-3 text-sm font-medium text-ink-2 transition-colors hover:bg-surface-2 hover:text-ink"
               >
                 {link.label}
               </a>
@@ -148,7 +186,7 @@ export function SiteFooter() {
           <div>
             <Logo href={href("/")} name={dict.common.brand} latin={dict.common.brandLatin} />
             <p className="mt-4 max-w-xs text-sm leading-relaxed text-ink-3">{dict.footer.tagline}</p>
-            <p className="mt-4 text-xs leading-relaxed text-ink-3">{dict.footer.demoNote}</p>
+            {DEMO_MODE && <p className="mt-4 text-xs leading-relaxed text-ink-3">{dict.footer.demoNote}</p>}
           </div>
 
           <FooterColumn
@@ -197,13 +235,14 @@ function FooterColumn({
 }) {
   return (
     <div>
-      <h4 className="text-xs font-semibold text-ink">{title}</h4>
-      <ul className="mt-3 space-y-2.5">
+      <h2 className="text-xs font-semibold text-ink">{title}</h2>
+      {/* 44px rows on touch screens; the denser list returns with a pointer-sized layout. */}
+      <ul className="mt-2 sm:mt-3 sm:space-y-2.5">
         {links.map((link) => (
           <li key={link.label}>
             <Link
               href={link.href}
-              className="text-sm text-ink-3 transition-colors duration-150 hover:text-ink"
+              className="inline-flex min-h-11 items-center text-sm text-ink-3 transition-colors duration-150 hover:text-ink sm:min-h-0"
             >
               {link.label}
             </Link>

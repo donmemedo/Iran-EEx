@@ -18,9 +18,10 @@ const variants: Record<Variant, string> = {
 };
 
 const sizes: Record<Size, string> = {
-  sm: "h-9 px-3.5 text-[0.8125rem] gap-1.5 rounded-[--radius-sm]",
-  md: "h-11 px-5 text-sm gap-2 rounded-[--radius-md]",
-  lg: "h-13 px-7 text-base gap-2.5 rounded-[--radius-md]",
+  // 36px tall to look compact; tap-target keeps the hit area at 44px.
+  sm: "tap-target h-9 px-3.5 text-[0.8125rem] gap-1.5 rounded-sm",
+  md: "h-11 px-5 text-sm gap-2 rounded-md",
+  lg: "h-13 px-7 text-base gap-2.5 rounded-md",
 };
 
 /**
@@ -31,7 +32,7 @@ const base =
   "relative inline-flex items-center justify-center font-medium select-none " +
   "transition-[transform,background-color,box-shadow,color] duration-150 ease-[var(--ease-out)] " +
   "active:scale-[0.97] active:duration-100 " +
-  "disabled:pointer-events-none disabled:opacity-50 " +
+  "disabled:pointer-events-none disabled:opacity-50 aria-busy:cursor-progress aria-busy:opacity-70 " +
   "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand";
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -45,12 +46,18 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
   { className, variant = "primary", size = "md", loading, children, disabled, ...props },
   ref,
 ) {
+  // While loading the button stays focusable (a native disabled button drops
+  // keyboard focus to <body>); clicks, and so form submits, are swallowed instead.
+  const busy = Boolean(loading) && !disabled;
   return (
     <button
       ref={ref}
       className={cn(base, variants[variant], sizes[size], className)}
-      disabled={disabled || loading}
+      disabled={disabled}
+      aria-disabled={busy || undefined}
+      aria-busy={busy || undefined}
       {...props}
+      onClick={busy ? (event) => event.preventDefault() : props.onClick}
     >
       {loading && (
         <span

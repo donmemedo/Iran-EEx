@@ -1,11 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import { defaultLocale, locales } from "@/i18n/config";
+import { defaultLocale, isLocale, locales } from "@/i18n/config";
 
 const PUBLIC_FILE = /\.(.*)$/;
 
 /** Send every unprefixed path to a locale, preferring the browser's language. */
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   if (
@@ -23,9 +23,17 @@ export function middleware(request: NextRequest) {
   );
   if (hasLocale) return NextResponse.next();
 
-  const header = request.headers.get("accept-language") ?? "";
-  const preferred = locales.find((locale) => header.toLowerCase().includes(locale)) ?? defaultLocale;
+  // Browsers list languages in preference order; take the first one we support.
+  // (A substring check picked fa for "en-US,en;q=0.9,fa;q=0.8".)
+  const preferred =
+    (request.headers.get("accept-language") ?? "")
+      .split(",")
+      .map((tag) => tag.trim().slice(0, 2).toLowerCase())
+      .find(isLocale) ?? defaultLocale;
 
+  // No open redirect: the target is a clone of this request's URL and its path
+  // always starts with /{locale}, so a path like //evil.example stays on this
+  // origin. `preferred` comes from our own list, never from the raw header.
   const url = request.nextUrl.clone();
   url.pathname = `/${preferred}${pathname === "/" ? "" : pathname}`;
   return NextResponse.redirect(url);

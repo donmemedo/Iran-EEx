@@ -15,6 +15,9 @@ COPY . .
 # The browser talks to the API directly, so its URL is baked in at build time.
 ARG NEXT_PUBLIC_API_URL=http://localhost:8000
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+# Demo account panel on the login page. Keep false in production.
+ARG NEXT_PUBLIC_DEMO_MODE=false
+ENV NEXT_PUBLIC_DEMO_MODE=$NEXT_PUBLIC_DEMO_MODE
 ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN npm run build

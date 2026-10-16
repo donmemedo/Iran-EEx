@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/app/pieces";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
+import { useThemeSwitch } from "@/components/ui/toggles";
 import { locales, localeMeta } from "@/i18n/config";
 import { useAuth } from "@/lib/auth";
 import { useLocale } from "@/lib/locale-context";
@@ -21,7 +22,8 @@ interface InstallPromptEvent extends Event {
 export default function SettingsPage() {
   const { dict, locale } = useLocale();
   const { user } = useAuth();
-  const { theme, setTheme } = useTheme();
+  const { theme } = useTheme();
+  const switchTheme = useThemeSwitch();
   const router = useRouter();
   const pathname = usePathname();
 
@@ -80,9 +82,11 @@ export default function SettingsPage() {
                 return (
                   <button
                     key={item.value}
-                    onClick={() => setTheme(item.value)}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => switchTheme(item.value)}
                     className={cn(
-                      "flex flex-col items-center gap-2 rounded-[--radius-md] border p-4 transition-[border-color,background-color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.97]",
+                      "flex flex-col items-center gap-2 rounded-md border p-4 transition-[border-color,background-color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.97] active:duration-75",
                       active
                         ? "border-brand bg-brand-soft text-brand"
                         : "border-line bg-surface-2 text-ink-2 hover:border-line-strong",
@@ -106,11 +110,14 @@ export default function SettingsPage() {
                 return (
                   <button
                     key={value}
+                    type="button"
+                    aria-pressed={active}
+                    lang={value}
                     onClick={() =>
                       router.push(pathname.replace(new RegExp(`^/${locale}`), `/${value}`))
                     }
                     className={cn(
-                      "flex items-center justify-between gap-2 rounded-[--radius-md] border p-4 transition-colors duration-150 active:scale-[0.97]",
+                      "flex items-center justify-between gap-2 rounded-md border p-4 transition-[border-color,background-color,transform] duration-150 active:scale-[0.97] active:duration-75",
                       active
                         ? "border-brand bg-brand-soft text-brand"
                         : "border-line bg-surface-2 text-ink-2 hover:border-line-strong",
