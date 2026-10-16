@@ -20,8 +20,9 @@ Apple-design guidance for motion, touch targets, focus handling and accessibilit
 | Python dependency vulnerabilities (pip-audit) | 35 in 5 packages | 0 |
 | npm vulnerabilities (npm audit) | 1 critical, 2 high | 0 |
 | bandit / ruff security rules | clean / 1 (default secret) | clean / clean |
-| Backend tests | suite timed out after 300 s | 64 pass in about 30 s |
-| Security regression tests | 0 | 39 |
+| Backend tests | suite timed out after 300 s | 76 pass in about 1-2 min on the loaded build machine |
+| Security regression tests | 0 | 51 |
+| semgrep (python, typescript, react, nextjs, secrets, owasp, dockerfile) | not run | 0 findings in 91 files |
 
 A live penetration test against running servers was **not** performed. That step was
 blocked by the assistant's safety classifier, and per the owner's instruction it was
@@ -39,7 +40,8 @@ skipped rather than worked around. The same attacks are encoded as automated tes
 | Attack tree | Section 4 |
 | Performance | SQL statement counts per endpoint and isolated function timings, original code against hardened code |
 | UI/UX | `apple-design` skill applied to the app shell, primitives, pages, marketing site and charts |
-| Simplicity | `ponytail` while building, `ponytail-review` on the final diff |
+| Simplicity | `ponytail` while building; `ponytail-review` of the whole branch by an independent Sonnet 5.5 pass, then applied or rejected in a final Opus 5.5 pass |
+| Independent review | Blue-team control verification and a completeness check against every original finding |
 | Code map | graphify knowledge graph of the codebase |
 
 ## 3. Findings and fixes
@@ -56,8 +58,8 @@ Severity reflects impact before the fix. Every row is fixed unless marked otherw
 | B4 | Critical | Open registration attached new accounts to the first organization as manager | Endpoint removed; the UI never used it | `test_registration_endpoint_is_gone` |
 | B5 | High | No role enforcement: analysts could change findings and acknowledge alerts | `Editor` dependency: owner, manager, admin only | `test_analyst_is_read_only` |
 | B6 | High | Default JWT secret in code, compose and `.env.example` | API refuses to start outside development with a missing, known or short secret; compose requires it | `test_weak_jwt_secret_is_refused_outside_development` |
-| B7 | High | Demo users with a published password seeded in every environment | Seeding is opt-in (`SEED_ON_STARTUP=false` by default) and skips any database that already has users | manual |
-| B8 | High | No rate limiting on login or public forms; each login costs a bcrypt run | Per-IP and per-email login limits, per-IP limits on public endpoints, per-user ceiling on the API | `test_login_is_rate_limited`, `test_lead_spam_is_rate_limited` |
+| B7 | High | Demo users with a published password seeded in every environment | Seeding is opt-in (`SEED_ON_STARTUP=false` by default), warns when enabled in production, and skips any database that already has users | `test_demo_seed_never_touches_a_populated_database` |
+| B8 | High | No rate limiting on login or public forms; each login costs a bcrypt run | Per-IP, per-source-and-account and per-account login limits, per-IP limits on public endpoints, per-user ceiling on the API | `test_login_is_rate_limited`, `test_lead_spam_is_rate_limited`, `test_one_source_cannot_lock_an_account_out_for_everyone` |
 | B9 | High | Vulnerable dependencies: python-jose (CVE-2024-33663/33664), python-multipart (6 CVEs), starlette (8 advisories) | PyJWT, bcrypt directly, FastAPI 0.142.4, Starlette 1.7.0, python-multipart 0.0.32 | pip-audit: 0 |
 | B10 | Medium | Infinity/NaN in a request body crashed the default validation handler (HTTP 500), and validation errors echoed input such as passwords | Non-echoing 422 handler; `allow_inf_nan=False` on every request model | `test_calculator_rejects_hostile_numbers_and_fields`, `test_validation_errors_do_not_echo_input` |
 | B11 | Medium | User enumeration: unknown emails skipped bcrypt (timing) | Dummy-hash verification for unknown emails, identical 401 body | `test_unknown_email_and_wrong_password_look_the_same` |
@@ -65,11 +67,20 @@ Severity reflects impact before the fix. Every row is fixed unless marked otherw
 | B13 | Medium | Unbounded numbers and strings in public schemas, unknown fields accepted | Upper bounds, enum literals, `extra="forbid"`, energy total must be positive | `test_bill_analysis_with_no_energy_is_rejected` |
 | B14 | Medium | No request body size limit | 64 KB limit, 413 | `test_oversized_body_is_rejected` |
 | B15 | Low | 7-day tokens with the email as subject | 12-hour tokens, subject is the user id, `typ` claim, required claims | `test_forged_or_stale_tokens_are_rejected` |
-| B16 | Low | API docs and schema public in production | Only with `ENVIRONMENT=development` | manual |
+| B16 | Low | API docs and schema public in production | Only with `ENVIRONMENT=development` | `test_docs_and_form_login_are_off_in_production` |
 | B17 | Low | CORS allowed credentials and every method and header | No credentials, explicit methods and headers | `test_cors_rejects_unknown_origins` |
 | B18 | Low | No security headers; authenticated responses cacheable | nosniff, frame denial, referrer policy, `Cache-Control: no-store`, restrictive CSP on the API | `test_api_responses_carry_security_headers` |
 | B19 | Low | Tests copied into the production image; dev tools in production requirements | `COPY tests` removed; `requirements-dev.txt` | manual |
 | B20 | Low | Postgres password fallback in compose | Required variable, no fallback | manual |
+| B21 | Medium | The body limit only checked `Content-Length`, so a streamed body was read in full | Starlette's streaming `RequestBodyLimitMiddleware` | `test_streamed_body_without_length_is_capped` |
+| B22 | Medium | Behind a reverse proxy every client would share one rate-limit bucket | `FORWARDED_ALLOW_IPS` wired in compose and documented | manual |
+| B23 | Low | One client could lock a known account out with 20 attempts | Per-source-and-account limit (20/15 min) plus a per-account ceiling (100/15 min) | `test_one_source_cannot_lock_an_account_out_for_everyone` |
+| B24 | Low | Passwords were whitespace-stripped before comparison | Compared exactly | `test_password_is_compared_exactly` |
+| B25 | Low | Ids above int64 crashed SQLite with a 500 | Ids bounded, 422 | `test_oversized_ids_are_rejected_not_crashing` |
+| B26 | Low | A full rate-limit table wiped every live counter | Evicts the oldest window only | `test_limiter_overflow_evicts_oldest_not_everything` |
+| B27 | Low | No detection logging beyond failed logins | Logs for rejected tokens, role denials, cross-tenant site probes, and audit lines for every data change | manual |
+| B28 | Low | Form login and python-multipart (6 CVEs in the old pin) kept only for the API docs | Removed; the docs use a plain bearer token | `test_docs_and_form_login_are_off_in_production` |
+| B29 | Low | 413 responses skipped the security headers | Header middleware moved outside the body limit | `test_oversized_body_is_rejected` |
 
 ### 3.2 Frontend
 
@@ -83,14 +94,16 @@ Severity reflects impact before the fix. Every row is fixed unless marked otherw
 | F6 | Low | Demo credentials prefilled on the login page in every build | Only with `NEXT_PUBLIC_DEMO_MODE=true` |
 | F7 | Low | Login showed "invalid credentials" for network errors, 5xx and rate limits | Distinct messages, with the retry time for 429 |
 | F8 | Low | Lead form stripped Persian digits from phone numbers, so Persian input failed | Digits normalised before validation; client validation mirrors the backend |
+| F9 | Low | Logout in one tab left other tabs showing the previous user's data | Every tab ends its session when the token disappears |
+| F10 | Low | The landing headline was rendered invisible until JavaScript loaded | CSS entrance transitions; content is visible without JavaScript |
 
 ### 3.3 Logic bugs
 
 | # | Finding | Fix |
 |---|---|---|
 | L1 | Monthly energy cost summed the N latest invoices overall, not the latest per site | Latest invoice of each site |
-| L2 | `energy_intensity_change` was hardcoded to -6.4 | Computed from invoices: latest three billing months against the first three |
-| L3 | "Verified savings this year" summed all time | Current Jalali year (the UI says «امسال») |
+| L2 | `energy_intensity_change` was hardcoded to -6.4 | Computed per site from its invoices (latest three months against the first three) and averaged, because sites count production in different units |
+| L3 | "Verified savings this year" summed all time | Savings since the Gregorian month that contains Nowruz (savings are stored per Gregorian month; the UI says «امسال») |
 | L4 | Seed was not crash-safe | One transaction; skips non-empty databases |
 | L5 | One test passed without asserting anything when no alerts existed | Fixture guarantees an alert; the test asserts the count drops |
 | L6 | Browser language detection picked Persian for `en-US,en;q=0.9,fa;q=0.8` | First supported tag in preference order |
@@ -145,7 +158,7 @@ Measured in-process on the same three-site dataset, original code against harden
 | 12-month consumption series | about 8,760 samples per request | finished months computed once per process; repeat calls are cache hits |
 | Dashboard 24-hour series | regenerated per site per request | cached per 15-minute slot |
 | Seed | bcrypt per demo user, commit per invoice, totals computed twice | one bcrypt run, one transaction, cached totals |
-| Test suite | over 300 s (timed out) | about 30 s (seed once, copy per test) |
+| Test suite | over 300 s (timed out) | 30 s to 2 min depending on machine load (seed once, copy per test) |
 
 Cached outputs were checked against the original implementation and are identical, so
 stored invoices still agree with the charts.
@@ -160,7 +173,7 @@ stored invoices still agree with the charts.
 - **Error states:** every page shows an error state with retry instead of an endless skeleton; optimistic actions roll back with an inline error.
 - **Roles in the UI:** analysts see a view-only note instead of controls that would fail.
 - **Accessibility:** WCAG AA contrast for secondary text, a correct high-contrast mode in both themes, reduced transparency honoured, letter-spacing disabled for Persian text where it breaks cursive joins.
-- **Marketing site:** LazyMotion for a smaller animation bundle, truthful security copy, lead-form validation with Persian digits, text alternatives for charts.
+- **Marketing site:** hero entrances in plain CSS (no animation library on that path), truthful security copy, lead-form validation with Persian digits, polite live-region errors, text alternatives and captions for every chart.
 
 ## 7. Residual risks and recommendations
 
@@ -168,11 +181,16 @@ stored invoices still agree with the charts.
 2. **Rate limits are per process.** With several workers or instances, move the counters to Redis.
 3. **No server-side session revocation.** Tokens live 12 hours; add a token version on the user when password change or forced logout is needed.
 4. **No migrations tool.** `init_db` creates missing tables and indexes; adopt Alembic before the schema changes in place.
-5. **Client IP behind a proxy.** Run uvicorn with `--proxy-headers --forwarded-allow-ips=<proxy>` when deployed behind a reverse proxy, or every client shares one rate-limit bucket.
+5. **Client IP behind a proxy.** Set `FORWARDED_ALLOW_IPS` to the proxy's address, or every client shares one rate-limit bucket.
+6. **Account lockout by a distributed attacker.** The per-account ceiling (100 attempts in 15 minutes from any source) can still lock one account for 15 minutes. That is the trade-off for stopping distributed password guessing.
+7. **Service-worker race.** A data request in flight at logout can land in the offline cache after the wipe; the next login wipes it again.
+8. **Animation library on the landing page.** The calculator's segmented control still pulls framer-motion into the public bundle. A CSS-transition thumb would remove it.
+9. **Content gaps** (product decisions): the footer's Privacy and Terms links point at page sections, province names are Persian in the English locale, and the contact phone is a placeholder. Dark-mode critical red is about 4:1 on surfaces, below AA for small text.
 
 ## 8. What was not done
 
 - **Live penetration test** against running servers: blocked by the assistant's safety classifier and skipped on the owner's instruction. The equivalent attacks run as automated tests.
+- **Ponytail suggestions not applied:** replacing the drawer focus handling with `<dialog>`, the account menu with `popover`, and the segmented control with native radios. Each removes code, but each also rewrites a component that already passes its accessibility review, so they are left for a follow-up with a browser test. The drag physics were explicitly requested.
 
 ## 9. How to verify
 

@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import jwt
 import pytest
+from fastapi import HTTPException
 from conftest import PASSWORD, login
 from pydantic import ValidationError
 
@@ -169,6 +170,7 @@ def test_unknown_finding_status_is_rejected(client, demo_headers, demo_ids):
 def test_oversized_body_is_rejected(client):
     r = client.post(f"{API}/leads", content=b"x" * (70 * 1024), headers={"Content-Type": "application/json"})
     assert r.status_code == 413
+    assert r.headers["X-Content-Type-Options"] == "nosniff"  # rejections carry the headers too
 
 
 # --- transport and headers ------------------------------------------------------
@@ -219,7 +221,7 @@ def test_one_source_cannot_lock_an_account_out_for_everyone():
     for _ in range(20):
         login_by_ip_email.hit("10.0.0.1|demo@eex.ir")
         login_by_email.hit("demo@eex.ir")
-    with pytest.raises(Exception) as blocked:
+    with pytest.raises(HTTPException) as blocked:
         login_by_ip_email.hit("10.0.0.1|demo@eex.ir")
     assert blocked.value.status_code == 429
     login_by_ip_email.hit("10.0.0.2|demo@eex.ir")  # the real user, elsewhere: still allowed
@@ -236,7 +238,7 @@ def test_limiter_overflow_evicts_oldest_not_everything(monkeypatch):
     limiter.hit("victim")
     limiter.hit("d")  # table full: evicts "a", the oldest window
     assert set(limiter._hits) == {"b", "victim", "d"}
-    with pytest.raises(Exception):
+    with pytest.raises(HTTPException):
         limiter.hit("victim")  # its count survived the overflow
 
 
@@ -284,8 +286,14 @@ def test_docs_and_form_login_are_off_in_production():
         "paths = set(app.openapi_schema or {}) | {getattr(r, 'path', '') for r in app.router.routes};"
         "print(app.docs_url, app.openapi_url, any(p.endswith('/auth/token') for p in paths))"
     )
-    out = subprocess.run(
+    out = subprocess.run(  # noqa: S603 - fixed argv, our own interpreter
         [sys.executable, "-c", probe], env=env, capture_output=True, text=True, timeout=300,
         cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     )
     assert out.stdout.split() == ["None", "None", "False"], out.stderr[-2000:]
+
+
+def test_demo_seed_never_touches_a_populated_database(db):
+    from app.seed import seed
+
+    assert seed(db) == {"seeded": False, "reason": "already populated"}

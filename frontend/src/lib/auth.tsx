@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { mutate } from "swr";
 
-import { ApiError, apiFetch, getToken, setToken, UNAUTHORIZED_EVENT, type User } from "./api";
+import { ApiError, apiFetch, getToken, setToken, TOKEN_KEY, UNAUTHORIZED_EVENT, type User } from "./api";
 
 interface AuthContextValue {
   user: User | null;
@@ -74,8 +74,17 @@ export function AuthProvider({ children, locale }: { children: ReactNode; locale
       // itself, which would loop) stay where they are.
       if (window.location.pathname.startsWith(`/${locale}/app`)) router.replace(`/${locale}/login`);
     }
+    // Logged out in another tab: the token is gone there, so end this tab's session
+    // too instead of leaving the previous user's data on screen.
+    function onStorage(event: StorageEvent) {
+      if (event.key === TOKEN_KEY && event.newValue === null) onUnauthorized();
+    }
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
-    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+      window.removeEventListener("storage", onStorage);
+    };
   }, [endSession, router, locale]);
 
   const login = useCallback(async (email: string, password: string) => {

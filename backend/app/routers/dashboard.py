@@ -23,22 +23,25 @@ router = APIRouter(tags=["dashboard"])
 
 
 def _energy_intensity_change(session, user) -> float:
-    """Percent change in kWh per production unit: latest 3 billing months vs the first 3."""
+    """Mean per-site percent change in kWh per production unit, latest 3 billing months vs
+    the first 3. Per site, because sites count production in different units (tons,
+    square metres, batches) that cannot be added together."""
     rows = session.exec(
         select(
-            func.sum(Bill.peak_kwh + Bill.mid_peak_kwh + Bill.off_peak_kwh),
-            func.sum(Bill.production_units),
+            Bill.site_id,
+            Bill.peak_kwh + Bill.mid_peak_kwh + Bill.off_peak_kwh,
+            Bill.production_units,
         )
         .where(Bill.site_id.in_(org_site_ids(user)), Bill.production_units > 0)
-        .group_by(Bill.jalali_year, Bill.jalali_month)
-        .order_by(Bill.jalali_year, Bill.jalali_month)
+        .order_by(Bill.site_id, Bill.jalali_year, Bill.jalali_month)
     ).all()
-    intensities = [kwh / units for kwh, units in rows if units]
-    if len(intensities) < 6:
-        return 0.0
-    before = sum(intensities[:3]) / 3
-    after = sum(intensities[-3:]) / 3
-    return round((after / before - 1) * 100, 1) if before else 0.0
+    by_site: dict[int, list[float]] = {}
+    for site_id, kwh, units in rows:
+        by_site.setdefault(site_id, []).append(kwh / units)
+    changes = [
+        sum(v[-3:]) / sum(v[:3]) - 1 for v in by_site.values() if len(v) >= 6 and sum(v[:3])
+    ]
+    return round(sum(changes) / len(changes) * 100, 1) if changes else 0.0
 
 
 @router.get("/dashboard", response_model=DashboardOut)

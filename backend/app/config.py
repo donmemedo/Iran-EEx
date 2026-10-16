@@ -5,9 +5,10 @@ from typing import Literal
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Placeholders that shipped in earlier versions of .env.example and compose.
-# A deployment still using one of them signs tokens anyone can forge.
-KNOWN_WEAK_SECRETS = {"change-me-in-production-eex-iran", "changeme", "secret", ""}
+# The placeholder that shipped in earlier versions of .env.example and compose. A
+# deployment still using it signs tokens anyone can forge. (Shorter guesses fail the
+# 32-character check anyway.)
+KNOWN_WEAK_SECRET = "change-me-in-production-eex-iran"
 
 
 class Settings(BaseSettings):
@@ -20,7 +21,6 @@ class Settings(BaseSettings):
     # SQLite by default so the API runs with zero infrastructure; compose overrides it.
     database_url: str = "sqlite:///./eex.db"
     jwt_secret: str = ""
-    jwt_algorithm: Literal["HS256"] = "HS256"
     access_token_expire_minutes: int = 60 * 12
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     # Demo data and the demo users (with a published password) are opt-in.
@@ -40,7 +40,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _require_strong_secret(self) -> "Settings":
-        weak = self.jwt_secret in KNOWN_WEAK_SECRETS or len(self.jwt_secret) < 32
+        weak = self.jwt_secret == KNOWN_WEAK_SECRET or len(self.jwt_secret) < 32
         if weak and not self.is_development:
             raise ValueError(
                 "JWT_SECRET must be a random value of at least 32 characters "

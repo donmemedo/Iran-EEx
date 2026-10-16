@@ -163,6 +163,7 @@ export default function SiteDetailPage() {
           {series ? (
             <>
               <LoadChart
+                label={dict.app.site.consumption}
                 points={series.points.map((point) => ({
                   ts: point.ts,
                   value: isMonthly ? point.kwh : point.kw,

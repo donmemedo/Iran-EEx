@@ -80,6 +80,7 @@ export default function SavingsPage() {
         <CardHeader title={dict.app.dashboard.savingsTrend} hint={dict.common.millionToman} />
         <div className="p-3 sm:p-5">
           <BarSeries
+            label={dict.app.dashboard.savingsTrend}
             points={months.map(([month, entry]) => ({
               key: month,
               label: formatMonthKey(month, locale),

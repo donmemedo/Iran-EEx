@@ -23,10 +23,10 @@ def org_site_ids(user: User):
 
 def get_site_or_404(session: Session, user: User, site_id: int) -> Site:
     site = session.get(Site, site_id)
-    if site is not None and site.organization_id != user.organization_id:
-        # Someone asked for another tenant's site by id: worth alerting on in bursts.
-        log.warning("tenant_mismatch user_id=%s site_id=%s", user.id, site_id)
     if site is None or site.organization_id != user.organization_id:
+        if site is not None:
+            # Someone asked for another tenant's site by id: worth alerting on in bursts.
+            log.warning("tenant_mismatch user_id=%s site_id=%s", user.id, site_id)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Site not found")
     return site
 

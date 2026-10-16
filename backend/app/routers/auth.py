@@ -6,12 +6,9 @@ provisioned for a customer's organization; add an owner-only invitation endpoint
 when self-service onboarding is needed.
 """
 import logging
-from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.security import OAuth2PasswordRequestForm
+from fastapi import APIRouter, HTTPException, Request, status
 
-from ..config import settings
 from ..models import Organization
 from ..ratelimit import redact, client_ip, login_by_email, login_by_ip, login_by_ip_email
 from ..schemas import LoginRequest, Token, UserOut
@@ -40,20 +37,6 @@ def _login(request: Request, session, email: str, password: str) -> Token:
 @router.post("/login", response_model=Token)
 def login(payload: LoginRequest, request: Request, session: DbSession) -> Token:
     return _login(request, session, payload.email, payload.password)
-
-
-def login_form(
-    form: Annotated[OAuth2PasswordRequestForm, Depends()], request: Request, session: DbSession
-) -> Token:
-    """OAuth2 password flow, so the interactive API docs can authorise."""
-    if len(form.username) > 254 or len(form.password) > 128:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=INVALID_CREDENTIALS)
-    return _login(request, session, form.username, form.password)
-
-
-if settings.is_development:
-    # Only the interactive docs use the form login, and docs are development-only.
-    router.post("/token", response_model=Token, include_in_schema=False)(login_form)
 
 
 @router.get("/me", response_model=UserOut)

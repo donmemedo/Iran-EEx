@@ -151,6 +151,7 @@ export default function DashboardPage() {
           />
           <div className="p-3 sm:p-5">
             <LoadChart
+              label={dict.app.dashboard.portfolioLoad}
               points={data.portfolio_load.map((point, index) => ({
                 ts: point.ts,
                 value: point.kw,
@@ -191,6 +192,7 @@ export default function DashboardPage() {
           <CardHeader title={dict.app.dashboard.savingsTrend} hint={dict.common.millionToman} />
           <div className="p-3 sm:p-5">
             <BarSeries
+              label={dict.app.dashboard.savingsTrend}
               points={data.savings_trend.map((item) => ({
                 key: item.month,
                 label: formatMonthKey(item.month, locale),

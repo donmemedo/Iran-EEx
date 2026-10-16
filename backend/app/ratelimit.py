@@ -66,6 +66,9 @@ def client_ip(request: Request) -> str:
 
 def redact(key: str) -> str:
     """Log enough to correlate an attack without writing full emails to the log."""
+    if "|" in key:  # "ip|email" keys: keep the address, redact the email
+        ip, _, email = key.partition("|")
+        return f"{ip}|{redact(email)}"
     if "@" in key:
         local, _, domain = key.partition("@")
         return f"{local[:2]}***@{domain}"

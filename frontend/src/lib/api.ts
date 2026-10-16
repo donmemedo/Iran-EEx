@@ -2,7 +2,7 @@
 export const API_URL =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ?? "http://localhost:8000";
 
-const TOKEN_KEY = "eex.token";
+export const TOKEN_KEY = "eex.token";
 
 export function getToken(): string | null {
   if (typeof window === "undefined") return null;
@@ -38,12 +38,10 @@ export class ApiError extends Error {
   }
 }
 
-/** Retry-After is either delay-seconds or an HTTP date. */
+/** Retry-After in seconds. Our API only sends delay-seconds, never an HTTP date. */
 function parseRetryAfter(value: string | null): number | null {
-  if (!value) return null;
-  if (/^\d+$/.test(value.trim())) return Number(value.trim());
-  const date = Date.parse(value);
-  return Number.isNaN(date) ? null : Math.max(0, Math.ceil((date - Date.now()) / 1000));
+  const seconds = Number(value);
+  return value && Number.isFinite(seconds) ? seconds : null;
 }
 
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {

@@ -10,12 +10,6 @@ export function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-/** Map a value from one range onto another. */
-export function scale(value: number, inMin: number, inMax: number, outMin: number, outMax: number) {
-  if (inMax === inMin) return outMin;
-  return outMin + ((value - inMin) / (inMax - inMin)) * (outMax - outMin);
-}
-
 /**
  * Where a flick comes to rest, using the scroll-deceleration projection from
  * Apple's "Designing Fluid Interfaces". Velocity is in px/s; the result is px.

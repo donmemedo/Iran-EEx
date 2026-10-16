@@ -26,7 +26,7 @@ def _bills_out(session: Session, bills: list[Bill]) -> list[BillOut]:
             .where(Finding.bill_id.in_([b.id for b in bills]))
             .group_by(Finding.bill_id)
         ).all()
-    } if bills else {}
+    }
     return [
         BillOut(
             **b.model_dump(exclude={"breakdown"}),

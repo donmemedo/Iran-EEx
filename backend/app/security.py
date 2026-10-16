@@ -6,7 +6,7 @@ from typing import Annotated
 import bcrypt
 import jwt
 from fastapi import Depends, HTTPException, Request, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlmodel import Session, select
 
 from .config import settings
@@ -15,7 +15,9 @@ from .models import User
 from .ratelimit import api_by_user, client_ip
 
 log = logging.getLogger("eex.security")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.api_prefix}/auth/token", auto_error=False)
+# A plain bearer scheme: the docs "Authorize" button takes a token from /auth/login.
+bearer_scheme = HTTPBearer(auto_error=False)
+JWT_ALGORITHM = "HS256"  # pinned; tokens with any other alg are rejected
 
 # bcrypt only reads the first 72 bytes; longer input is rejected rather than truncated.
 _BCRYPT_MAX_BYTES = 72
@@ -43,17 +45,17 @@ def verify_password(plain: str, hashed: str) -> bool:
         return False
 
 
-def create_access_token(user: User, expires_minutes: int | None = None) -> str:
+def create_access_token(user: User) -> str:
     now = datetime.now(UTC)
     payload = {
         # The immutable id, not the email: tokens survive an email change and do
         # not put personal data in a value that ends up in logs.
         "sub": str(user.id),
         "iat": now,
-        "exp": now + timedelta(minutes=expires_minutes or settings.access_token_expire_minutes),
+        "exp": now + timedelta(minutes=settings.access_token_expire_minutes),
         "typ": "access",
     }
-    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+    return jwt.encode(payload, settings.jwt_secret, algorithm=JWT_ALGORITHM)
 
 
 def authenticate(session: Session, email: str, password: str) -> User | None:
@@ -68,7 +70,7 @@ def authenticate(session: Session, email: str, password: str) -> User | None:
 
 def get_current_user(
     request: Request,
-    token: Annotated[str | None, Depends(oauth2_scheme)],
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
     session: Annotated[Session, Depends(get_session)],
 ) -> User:
     credentials_error = HTTPException(
@@ -76,13 +78,14 @@ def get_current_user(
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    if not token:
+    if credentials is None:
         raise credentials_error
+    token = credentials.credentials
     try:
         payload = jwt.decode(
             token,
             settings.jwt_secret,
-            algorithms=[settings.jwt_algorithm],
+            algorithms=[JWT_ALGORITHM],
             options={"require": ["exp", "iat", "sub"]},
         )
         user_id = int(payload["sub"])

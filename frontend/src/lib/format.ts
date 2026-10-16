@@ -7,8 +7,6 @@
  */
 import type { Locale } from "@/i18n/config";
 
-const PERSIAN_DIGITS = ["۰", "۱", "۲", "۳", "۴", "۵", "۶", "۷", "۸", "۹"];
-
 /**
  * Intl formatters are expensive to build and a chart renders hundreds of
  * labels, so each locale + options pair is built once and reused.
@@ -32,13 +30,6 @@ function dateFormat(tag: string, options: Intl.DateTimeFormatOptions): Intl.Date
   return cached(dateFormats, `${tag}|${JSON.stringify(options)}`, () => new Intl.DateTimeFormat(tag, options));
 }
 
-export function toPersianDigits(input: string | number): string {
-  return String(input).replace(/[0-9]/g, (d) => PERSIAN_DIGITS[Number(d)]);
-}
-
-export function localizeDigits(input: string, locale: Locale): string {
-  return locale === "fa" ? toPersianDigits(input) : input;
-}
 
 /** The separator between list items: Persian uses its own comma. */
 export function listSeparator(locale: Locale): string {

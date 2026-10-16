@@ -7,6 +7,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.body_limit import RequestBodyLimitMiddleware
 from sqlmodel import Session
 
@@ -22,9 +23,9 @@ log = logging.getLogger("eex.security")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    if settings.seed_on_startup and not settings.is_development:
-        log.warning("demo_seed_enabled environment=%s: demo users have a public password", settings.environment)
     if settings.seed_on_startup:
+        if not settings.is_development:
+            log.warning("demo_seed_enabled environment=%s: demo users have a public password", settings.environment)
         with Session(engine) as session:
             seed(session)
     yield
@@ -53,7 +54,6 @@ SECURITY_HEADERS = {
 }
 
 
-@app.middleware("http")
 async def harden(request, call_next):
     response = await call_next(request)
     for key, value in SECURITY_HEADERS.items():
@@ -61,10 +61,7 @@ async def harden(request, call_next):
     if request.url.path.startswith(settings.api_prefix):
         # Tenant data must never sit in a shared or browser HTTP cache.
         response.headers["Cache-Control"] = "no-store"
-        if not request.url.path.startswith(f"{settings.api_prefix}/docs"):
-            response.headers.setdefault(
-                "Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'"
-            )
+        response.headers.setdefault("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
     return response
 
 
@@ -81,6 +78,8 @@ async def validation_error(request, exc: RequestValidationError) -> JSONResponse
 # around the limit. Every endpoint takes small JSON. Added before CORS, so CORS stays
 # the outer layer and the 413 is readable cross-origin.
 app.add_middleware(RequestBodyLimitMiddleware, max_body_size=settings.max_body_bytes)
+# Outside the body limit, so its 413 gets the security headers too.
+app.add_middleware(BaseHTTPMiddleware, dispatch=harden)
 
 app.add_middleware(
     CORSMiddleware,
